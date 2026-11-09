@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  DRIVER_FEATURES: "tideorm-driver/postgres,tideorm-driver/mysql,tideorm-driver/sqlite,tideorm-driver/tls-rustls"
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  # `rust-version` is a promise to downstream resolvers that no other job checks.
+  # Keep this literal in sync with `rust-version` in every manifest.
+  msrv:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@dc08e2af391d489dff6d14cf743e574f7d1229c5 # 1.94.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Check against the declared MSRV
+        run: cargo check --locked --workspace --features "$DRIVER_FEATURES,tideorm-driver/runtime-tokio"
+
+  # Unit and doc tests need no server; TideORM's live suites exercise the
+  # drivers against real databases.
+  drivers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Run clippy on Tokio
+        run: cargo clippy --locked --workspace --all-targets --features "$DRIVER_FEATURES,tideorm-driver/runtime-tokio" -- -D warnings
+
+      - name: Run clippy on async-std
+        run: cargo clippy --locked --workspace --all-targets --features "$DRIVER_FEATURES,tideorm-driver/runtime-async-std" -- -D warnings
+
+      - name: Test the drivers on Tokio
+        run: cargo test --locked --workspace --lib --features "$DRIVER_FEATURES,tideorm-driver/runtime-tokio"
+
+      - name: Test the drivers on async-std
+        run: cargo test --locked --workspace --lib --features "$DRIVER_FEATURES,tideorm-driver/runtime-async-std"
+
+      - name: Run the drivers' doc tests
+        run: cargo test --locked --workspace --doc --features "$DRIVER_FEATURES,tideorm-driver/runtime-tokio"

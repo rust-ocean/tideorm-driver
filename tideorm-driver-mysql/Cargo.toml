@@ -1,0 +1,42 @@
+[package]
+name = "tideorm-driver-mysql"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+description = "MySQL and MariaDB driver for TideORM"
+license = "MIT"
+repository = "https://github.com/rust-ocean/tideorm-driver"
+readme = "../README.md"
+keywords = ["database", "mysql", "mariadb", "driver", "tideorm"]
+categories = ["database"]
+
+[lib]
+name = "driver_mysql"
+path = "src/lib.rs"
+
+[dependencies]
+tideorm-driver-core = { version = "0.1.0", path = "../tideorm-driver-core" }
+bitflags = { version = "2.4", default-features = false }
+byteorder = { version = "1.4.3", default-features = false, features = ["std"] }
+bytes = "1.2.0"
+chrono = { version = "0.4.34", default-features = false, features = ["std", "clock"] }
+digest = { version = "0.11.2", default-features = false, features = ["alloc"] }
+either = "1.6.1"
+futures-core = { version = "0.3.32", default-features = false }
+futures-util = { version = "0.3.32", default-features = false, features = ["alloc", "sink", "io"] }
+rust_decimal = { version = "1.36.0", default-features = false, features = ["std", "maths"] }
+serde = "1.0.219"
+sha1 = { version = "0.11.0", default-features = false }
+sha2 = { version = "0.11.0", default-features = false }
+thiserror = { version = "2.0.18", default-features = false, features = ["std"] }
+tracing = { version = "0.1.37", features = ["log"] }
+uuid = "1.12.1"
+
+[dev-dependencies]
+# The doc examples call the driver through the front crate.
+tideorm-driver = { path = "..", features = ["mysql", "runtime-tokio"] }
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"

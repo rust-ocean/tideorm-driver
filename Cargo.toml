@@ -1,0 +1,49 @@
+[package]
+name = "tideorm-driver"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+description = "Database drivers for TideORM"
+license = "MIT"
+repository = "https://github.com/rust-ocean/tideorm-driver"
+readme = "README.md"
+keywords = ["database", "postgres", "mysql", "sqlite", "tideorm"]
+categories = ["database"]
+
+# The front crate, with the shared core and one crate per backend beside it.
+[workspace]
+members = [
+    ".",
+    "tideorm-driver-core",
+    "tideorm-driver-postgres",
+    "tideorm-driver-mysql",
+    "tideorm-driver-sqlite",
+]
+resolver = "3"
+
+# docs.rs builds no feature by default, which would document no backend.
+[package.metadata.docs.rs]
+features = ["postgres", "mysql", "sqlite", "runtime-tokio", "tls-rustls"]
+
+[lib]
+name = "driver"
+path = "src/lib.rs"
+
+[features]
+postgres = ["dep:tideorm-driver-postgres"]
+mysql = ["dep:tideorm-driver-mysql"]
+sqlite = ["dep:tideorm-driver-sqlite"]
+runtime-tokio = ["tideorm-driver-core/_rt-tokio"]
+runtime-async-std = ["tideorm-driver-core/_rt-async-std"]
+tls-rustls = ["tideorm-driver-core/_tls-rustls"]
+
+[dependencies]
+tideorm-driver-core = { version = "0.1.0", path = "tideorm-driver-core" }
+tideorm-driver-postgres = { version = "0.1.0", path = "tideorm-driver-postgres", optional = true }
+tideorm-driver-mysql = { version = "0.1.0", path = "tideorm-driver-mysql", optional = true }
+tideorm-driver-sqlite = { version = "0.1.0", path = "tideorm-driver-sqlite", optional = true }
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"

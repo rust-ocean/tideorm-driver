@@ -1,0 +1,69 @@
+[package]
+name = "tideorm-driver-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+description = "Connection, pool and type foundations of TideORM's database drivers"
+license = "MIT"
+repository = "https://github.com/rust-ocean/tideorm-driver"
+readme = "../README.md"
+keywords = ["database", "driver", "tideorm"]
+categories = ["database"]
+
+# docs.rs builds no feature by default; the front crate's runtime and TLS features select these.
+[package.metadata.docs.rs]
+features = ["_rt-tokio", "_tls-rustls"]
+
+[lib]
+name = "driver_core"
+path = "src/lib.rs"
+
+[features]
+# Runtimes and TLS: the front crate's `runtime-*` and `tls-rustls` features
+# select them.
+_rt-async-io = ["async-io"]
+_rt-async-std = ["async-std", "_rt-async-io"]
+_rt-tokio = ["tokio"]
+_tls-rustls = ["rustls", "rustls/ring", "webpki-roots"]
+
+[dependencies]
+async-io = { version = "2.4.1", optional = true }
+async-std = { version = "1.13", optional = true }
+tokio = { version = "1.25.0", default-features = false, features = ["time", "net", "sync", "fs", "io-util", "rt"], optional = true }
+rustls = { version = "0.23.24", default-features = false, features = ["std", "tls12"], optional = true }
+webpki-roots = { version = "1", optional = true }
+
+bytes = "1.10"
+cfg-if = "1.0.0"
+chrono = { version = "0.4.34", default-features = false, features = ["std", "clock"] }
+crossbeam-queue = "0.3.2"
+either = "1.6.1"
+event-listener = "5.2.0"
+futures-core = { version = "0.3.32", default-features = false }
+futures-intrusive = "0.5.0"
+futures-io = "0.3.32"
+futures-util = { version = "0.3.32", default-features = false, features = ["alloc", "sink", "io"] }
+hashbrown = "0.16.0"
+hashlink = "0.11.0"
+indexmap = "2.0"
+log = { version = "0.4.18", default-features = false }
+memchr = { version = "2.5.0", default-features = false }
+percent-encoding = "2.3.0"
+rust_decimal = { version = "1.36.0", default-features = false, features = ["std"] }
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = { version = "1.0.142", features = ["raw_value"] }
+smallvec = "1.13.1"
+thiserror = { version = "2.0.18", default-features = false, features = ["std"] }
+tracing = { version = "0.1.37", features = ["log"] }
+url = "2.2.2"
+uuid = "1.12.1"
+
+[dev-dependencies]
+# The doc examples call the drivers through the front crate.
+tideorm-driver = { path = "..", features = ["postgres", "mysql", "sqlite", "runtime-tokio"] }
+tokio = { version = "1.25.0", features = ["rt"] }
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"

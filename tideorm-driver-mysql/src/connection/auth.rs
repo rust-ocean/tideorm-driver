@@ -1,0 +1,191 @@
+use bytes::buf::Chain;
+use bytes::Bytes;
+use digest::Digest;
+use sha1::Sha1;
+use sha2::Sha256;
+
+use crate::connection::stream::MySqlStream;
+use crate::error::Error;
+use crate::protocol::auth::AuthPlugin;
+use crate::protocol::Packet;
+
+impl AuthPlugin {
+    pub(super) async fn scramble(
+        self,
+        stream: &mut MySqlStream,
+        password: &str,
+        nonce: &Chain<Bytes, Bytes>,
+    ) -> Result<Vec<u8>, Error> {
+        match self {
+            // https://mariadb.com/kb/en/caching_sha2_password-authentication-plugin/
+            AuthPlugin::CachingSha2Password => Ok(scramble_sha256(password, nonce)),
+
+            AuthPlugin::MySqlNativePassword => Ok(scramble_sha1(password, nonce)),
+
+            // https://mariadb.com/kb/en/sha256_password-plugin/
+            AuthPlugin::Sha256Password => encrypt_rsa(stream, 0x01, password, nonce).await,
+
+            AuthPlugin::MySqlClearPassword => {
+                let mut pw_bytes = password.as_bytes().to_owned();
+                pw_bytes.push(0); // null terminate
+                Ok(pw_bytes)
+            }
+        }
+    }
+
+    pub(super) async fn handle(
+        self,
+        stream: &mut MySqlStream,
+        packet: Packet<Bytes>,
+        password: &str,
+        nonce: &Chain<Bytes, Bytes>,
+    ) -> Result<bool, Error> {
+        match self {
+            AuthPlugin::CachingSha2Password if packet[0] == 0x01 => {
+                match packet.get(1) {
+                    // fast_auth_success — the server still sends a trailing
+                    // OK_Packet, so yield back to the handshake loop and let
+                    // it consume the OK on the next iteration.
+                    Some(0x03) => Ok(false),
+
+                    // perform_full_authentication
+                    Some(0x04) => {
+                        let payload = encrypt_rsa(stream, 0x02, password, nonce).await?;
+
+                        stream.write_packet(&*payload)?;
+                        stream.flush().await?;
+
+                        Ok(false)
+                    }
+
+                    v => {
+                        Err(err_protocol!("unexpected result from fast authentication {:02x?} when expecting 0x03 (fast_auth_success) or 0x04 (perform_full_authentication)", v))
+                    }
+                }
+            }
+
+            _ => Err(err_protocol!(
+                "unexpected packet 0x{:02x} for auth plugin '{}' during authentication",
+                packet[0],
+                self.name()
+            )),
+        }
+    }
+}
+
+fn scramble_sha1(password: &str, nonce: &Chain<Bytes, Bytes>) -> Vec<u8> {
+    // SHA1( password ) ^ SHA1( seed + SHA1( SHA1( password ) ) )
+    // https://mariadb.com/kb/en/connection/#mysql_native_password-plugin
+
+    let mut ctx = Sha1::new();
+
+    ctx.update(password);
+
+    let mut pw_hash = ctx.finalize_reset();
+
+    ctx.update(pw_hash);
+
+    let pw_hash_hash = ctx.finalize_reset();
+
+    ctx.update(nonce.first_ref());
+    ctx.update(nonce.last_ref());
+    ctx.update(pw_hash_hash);
+
+    let pw_seed_hash_hash = ctx.finalize();
+
+    xor_eq(&mut pw_hash, &pw_seed_hash_hash);
+
+    pw_hash.to_vec()
+}
+
+fn scramble_sha256(password: &str, nonce: &Chain<Bytes, Bytes>) -> Vec<u8> {
+    // XOR(SHA256(password), SHA256(SHA256(SHA256(password)), seed))
+    // Order matches the server-side verification in MySQL's sha2_password
+    // (generate_sha2_scramble): stage2 digest first, then the nonce.
+    let mut ctx = Sha256::new();
+
+    ctx.update(password);
+
+    let mut pw_hash = ctx.finalize_reset();
+
+    ctx.update(pw_hash);
+
+    let pw_hash_hash = ctx.finalize_reset();
+
+    ctx.update(pw_hash_hash);
+    ctx.update(nonce.first_ref());
+    ctx.update(nonce.last_ref());
+
+    let pw_seed_hash_hash = ctx.finalize();
+
+    xor_eq(&mut pw_hash, &pw_seed_hash_hash);
+
+    pw_hash.to_vec()
+}
+
+async fn encrypt_rsa<'s>(
+    stream: &'s mut MySqlStream,
+    public_key_request_id: u8,
+    password: &'s str,
+    nonce: &'s Chain<Bytes, Bytes>,
+) -> Result<Vec<u8>, Error> {
+    // https://mariadb.com/kb/en/caching_sha2_password-authentication-plugin/
+
+    if stream.is_tls {
+        // If in a TLS stream, send the password directly in clear text
+        return Ok(to_asciz(password));
+    }
+
+    // client sends a public key request
+    stream.write_packet(&[public_key_request_id][..])?;
+    stream.flush().await?;
+
+    // server sends a public key response
+    let packet = stream.recv_packet().await?;
+    let rsa_pub_key = &packet[1..];
+
+    // xor the password with the given nonce
+    let mut pass = to_asciz(password);
+
+    let (a, b) = (nonce.first_ref(), nonce.last_ref());
+    let mut nonce = Vec::with_capacity(a.len() + b.len());
+    nonce.extend_from_slice(a);
+    nonce.extend_from_slice(b);
+
+    xor_eq(&mut pass, &nonce);
+
+    // client sends an RSA encrypted password
+    rsa_backend::encrypt(rsa_pub_key, &pass)
+}
+
+// XOR(x, y)
+// If len(y) < len(x), wrap around inside y
+fn xor_eq(x: &mut [u8], y: &[u8]) {
+    let y_len = y.len();
+
+    for i in 0..x.len() {
+        x[i] ^= y[i % y_len];
+    }
+}
+
+fn to_asciz(s: &str) -> Vec<u8> {
+    let mut z = String::with_capacity(s.len() + 1);
+    z.push_str(s);
+    z.push('\0');
+
+    z.into_bytes()
+}
+
+mod rsa_backend {
+    use super::Error;
+
+    pub(super) fn encrypt(_rsa_pub_key: &[u8], _pass: &[u8]) -> Result<Vec<u8>, Error> {
+        Err(Error::Configuration(
+            "RSA password encryption is not supported; the connection must use TLS or a non-`caching_sha2`/`sha256_password` authentication method.".into(),
+        ))
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/connection_auth_tests.rs"]
+mod tests;

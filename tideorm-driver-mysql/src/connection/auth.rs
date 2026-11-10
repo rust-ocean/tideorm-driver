@@ -1,8 +1,7 @@
 use bytes::buf::Chain;
 use bytes::Bytes;
-use digest::Digest;
 use sha1::Sha1;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 use crate::connection::stream::MySqlStream;
 use crate::error::Error;

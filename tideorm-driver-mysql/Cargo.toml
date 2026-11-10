@@ -1,6 +1,6 @@
 [package]
 name = "tideorm-driver-mysql"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.94"
 description = "MySQL and MariaDB driver for TideORM"
@@ -20,7 +20,6 @@ bitflags = { version = "2.4", default-features = false }
 byteorder = { version = "1.4.3", default-features = false, features = ["std"] }
 bytes = "1.2.0"
 chrono = { version = "0.4.34", default-features = false, features = ["std", "clock"] }
-digest = { version = "0.11.2", default-features = false, features = ["alloc"] }
 either = "1.6.1"
 futures-core = { version = "0.3.32", default-features = false }
 futures-util = { version = "0.3.32", default-features = false, features = ["alloc", "sink", "io"] }

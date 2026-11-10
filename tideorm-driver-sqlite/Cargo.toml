@@ -1,6 +1,6 @@
 [package]
 name = "tideorm-driver-sqlite"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.94"
 description = "SQLite driver for TideORM, with a bundled SQLite"
@@ -18,7 +18,6 @@ path = "src/lib.rs"
 tideorm-driver-core = { version = "0.1.0", path = "../tideorm-driver-core" }
 chrono = { version = "0.4.34", default-features = false, features = ["std", "clock"] }
 flume = { version = "0.12.0", default-features = false, features = ["async"] }
-form_urlencoded = "1.2.2"
 futures-channel = { version = "0.3.32", default-features = false, features = ["sink", "alloc", "std"] }
 futures-core = { version = "0.3.32", default-features = false }
 futures-executor = "0.3.32"

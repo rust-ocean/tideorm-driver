@@ -96,7 +96,7 @@ impl EstablishParams {
 
             // Suffix serializer automatically handles `&` separators for us.
             let filename_len = filename.len();
-            filename = form_urlencoded::Serializer::for_suffix(filename, filename_len)
+            filename = url::form_urlencoded::Serializer::for_suffix(filename, filename_len)
                 .extend_pairs(query_params)
                 .finish();
         }

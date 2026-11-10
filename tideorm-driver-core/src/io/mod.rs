@@ -12,10 +12,10 @@ pub use buf::BufExt;
 pub use read_buf::ReadBuf;
 
 // `read_from` sources take the reading traits of the runtime the streams come from.
+#[cfg(not(feature = "_rt-tokio"))]
+pub use futures_util::io::{AsyncRead, AsyncReadExt};
 #[cfg(feature = "_rt-tokio")]
 pub use tokio::io::{AsyncRead, AsyncReadExt};
-#[cfg(not(feature = "_rt-tokio"))]
-pub use {futures_io::AsyncRead, futures_util::io::AsyncReadExt};
 
 /// Writes fields of an outgoing frame.
 pub trait BufMutExt: BufMut {

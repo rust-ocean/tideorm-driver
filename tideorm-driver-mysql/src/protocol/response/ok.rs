@@ -16,6 +16,9 @@ pub struct OkPacket {
 
 impl ProtocolDecode<'_> for OkPacket {
     fn decode_with(mut buf: Bytes, _: ()) -> Result<Self, Error> {
+        if buf.is_empty() {
+            return Err(err_protocol!("empty OK_Packet"));
+        }
         let header = buf.get_u8();
         if header != 0 && header != 0xfe {
             return Err(err_protocol!(

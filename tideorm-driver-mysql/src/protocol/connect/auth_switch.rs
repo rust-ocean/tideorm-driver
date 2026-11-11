@@ -16,6 +16,9 @@ pub struct AuthSwitchRequest {
 
 impl ProtocolDecode<'_, bool> for AuthSwitchRequest {
     fn decode_with(mut buf: Bytes, enable_cleartext_plugin: bool) -> Result<Self, Error> {
+        if buf.is_empty() {
+            return Err(err_protocol!("empty AUTH_SWITCH packet"));
+        }
         let header = buf.get_u8();
         if header != 0xfe {
             return Err(err_protocol!(

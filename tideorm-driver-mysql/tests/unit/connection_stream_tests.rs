@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::packet;
+use crate::test_support::{fuzz, packet};
 use driver_core::net::ScriptedSocket;
 
 #[test]
@@ -98,5 +98,77 @@ fn a_text_row_led_by_0xfe_does_not_end_the_result_set() {
         stream.wait_until_ready().await.unwrap();
         assert!(stream.status_flags.contains(Status::SERVER_STATUS_IN_TRANS));
         assert!(stream.waiting.is_empty());
+    });
+}
+
+/// Skips the rest of `reply` as `wait_until_ready` does, awaiting `waiting`.
+fn skip_reply(reply: &[u8], waiting: Waiting, deprecate_eof: bool) {
+    use futures_util::FutureExt;
+    let mut stream = MySqlStream::with_socket(
+        &MySqlConnectOptions::new(),
+        ScriptedSocket::new(reply.to_vec()),
+    );
+    stream
+        .capabilities
+        .set(Capabilities::DEPRECATE_EOF, deprecate_eof);
+    stream.waiting.push_back(waiting);
+    let _ = stream.wait_until_ready().now_or_never();
+}
+
+/// Any reply, its packets misframed included, is skipped or refused without a panic or an
+/// allocation its bytes do not justify.
+#[test]
+fn any_reply_is_skipped_or_refused_without_panicking() {
+    // six names, MariaDB's extended type info, then the fixed fields
+    let definition = packet(b"\x03def\0\0\0\x01c\0\0\x0c\x2d\0\xff\0\0\0\xfd\0\0\0\0\0");
+    let ok = packet(&[0, 0, 0, 2, 0, 0, 0]);
+    for (seed, deprecate_eof) in [(30, true), (31, false)] {
+        // an EOF packet, or the OK packet that stands for one
+        let eof = |status: u8| {
+            if deprecate_eof {
+                packet(&[0xfe, 0, 0, status, 0, 0, 0])
+            } else {
+                packet(&[0xfe, 0, 0, status, 0])
+            }
+        };
+        let metadata_end = if deprecate_eof { Vec::new() } else { eof(2) };
+        let result_set = [
+            packet(&[1]),
+            definition.clone(),
+            metadata_end,
+            packet(&[1, b'x']),
+        ]
+        .concat();
+        let replies = vec![
+            ok.clone(),
+            packet(b"\xff\x28\x04#42000You have an error"),
+            [result_set.clone(), eof(2)].concat(),
+            [result_set, eof(0x0a), ok.clone()].concat(), // more results
+        ];
+        fuzz(seed, 3000, &replies, |reply| {
+            skip_reply(reply, Waiting::Result, deprecate_eof);
+            skip_reply(reply, Waiting::Row, deprecate_eof);
+        });
+    }
+}
+
+/// A packet of 16 MiB or more is reassembled from its parts, whatever the parts after the first
+/// claim.
+#[test]
+fn any_part_after_the_first_is_read_or_refused_without_panicking() {
+    let mut first = vec![0xff, 0xff, 0xff, 0];
+    first.resize(4 + 0xFF_FF_FF, 0);
+    let tails: [&[u8]; 4] = [
+        &[0, 0, 0, 1],                // an empty last part
+        &[3, 0, 0, 1, 0, 0, 0],       // a last part of three bytes
+        &[0xff, 0xff, 0xff, 1, 0xfe], // a part that claims 16 MiB and stops short
+        &[0xff, 0xff, 0xff, 1],       // the same, with nothing after its header
+    ];
+    let inputs: Vec<Vec<u8>> = tails
+        .iter()
+        .map(|tail| [&first[..], tail].concat())
+        .collect();
+    fuzz(32, 0, &inputs, |input| {
+        skip_reply(input, Waiting::Result, true)
     });
 }

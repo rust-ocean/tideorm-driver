@@ -376,10 +376,13 @@ async fn recv_result_metadata(
     // the result-set metadata is primarily a listing of each output
     // column in the result-set
 
-    let mut column_names = HashMap::with_capacity(num_columns);
+    // The count is the server's: a forged one must not reserve memory before its definitions
+    // arrive. A prepared statement's columns are counted in a `u16`.
+    let capacity = num_columns.min(u16::MAX.into());
+    let mut column_names = HashMap::with_capacity(capacity);
 
     columns.clear();
-    columns.reserve(num_columns);
+    columns.reserve(capacity);
 
     for ordinal in 0..num_columns {
         let def: ColumnDefinition = stream.recv().await?;

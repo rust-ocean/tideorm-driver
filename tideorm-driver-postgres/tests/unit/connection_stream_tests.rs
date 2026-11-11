@@ -48,3 +48,29 @@ fn a_length_below_its_own_size_is_refused() {
         }
     });
 }
+
+#[test]
+fn a_server_version_past_u32_is_unknown() {
+    // each of these overflowed `u32` once scaled, which panicked in debug builds
+    for version in [
+        "430000",
+        "4294967295",
+        "99999999.1",
+        "9.99999999.1",
+        "1.2.4294967295",
+    ] {
+        assert_eq!(parse_server_version(version), None, "{version}");
+    }
+    assert_eq!(parse_server_version("429496.7295"), Some(u32::MAX));
+}
+
+#[test]
+fn any_server_version_parses_without_panicking() {
+    let mut rng = crate::test_support::Rng::new(5);
+    for _ in 0..20_000 {
+        let version: String = (0..rng.below(24))
+            .map(|_| char::from(*rng.pick(b"0123456789999.dev\xe9")))
+            .collect();
+        let _ = parse_server_version(&version);
+    }
+}

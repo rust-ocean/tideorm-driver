@@ -285,15 +285,16 @@ fn parse_server_version(s: &str) -> Option<u32> {
         };
     }
 
-    let version_num = match parts.as_slice() {
-        [major, minor, rev] => (100 * major + minor) * 100 + rev,
-        [major, minor] if *major >= 10 => 100 * 100 * major + minor,
-        [major, minor] => (100 * major + minor) * 100,
-        [major] => 100 * 100 * major,
+    // widened: the server's numbers can overflow a `u32` once scaled
+    let version_num = match *parts.as_slice() {
+        [major, minor, rev] => (100 * u64::from(major) + u64::from(minor)) * 100 + u64::from(rev),
+        [major, minor] if major >= 10 => 100 * 100 * u64::from(major) + u64::from(minor),
+        [major, minor] => (100 * u64::from(major) + u64::from(minor)) * 100,
+        [major] => 100 * 100 * u64::from(major),
         _ => return None,
     };
 
-    Some(version_num)
+    u32::try_from(version_num).ok()
 }
 
 #[cfg(test)]

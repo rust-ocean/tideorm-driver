@@ -115,3 +115,15 @@ fn flush_of_an_empty_buffer_writes_nothing() {
     run(socket.flush()).unwrap();
     assert!(socket.write_buf.is_empty());
 }
+
+#[test]
+fn a_forged_length_reserves_little_ahead_of_the_bytes_that_arrive() {
+    use futures_util::FutureExt;
+
+    // a PostgreSQL header can claim up to 4 GiB; only 16 bytes follow it
+    let mut socket = BufferedSocket::new(ScriptedSocket::new(vec![0; 16]));
+    let forged = usize::try_from(u32::MAX).unwrap();
+    assert!(socket.read_buffered(forged).now_or_never().is_none());
+    assert_eq!(socket.read_buf.read.len(), 16);
+    assert!(socket.read_buf.available.capacity() <= 2 * MAX_READ_AHEAD);
+}

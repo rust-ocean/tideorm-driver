@@ -332,6 +332,10 @@ fn encode_time(time: &NaiveTime, include_micros: bool, buf: &mut Vec<u8>) {
 }
 
 fn decode_time(len: u8, mut buf: &[u8]) -> Result<NaiveTime, BoxDynError> {
+    // the hour, minute and second, then up to 8 bytes of microseconds
+    if !(3..=11).contains(&buf.len()) {
+        return Err(format!("expected 3 to 11 bytes for a time, got {}", buf.len()).into());
+    }
     let hour = buf.get_u8();
     let minute = buf.get_u8();
     let seconds = buf.get_u8();

@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "tideorm-driver-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-io",
  "async-std",
@@ -1442,7 +1442,7 @@ dependencies = [
 
 [[package]]
 name = "tideorm-driver-mysql"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "tideorm-driver-postgres"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "atoi",
  "base64",

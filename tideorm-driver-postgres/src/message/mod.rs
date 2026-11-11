@@ -244,3 +244,7 @@ bodiless! {
     /// The server's acknowledgement of a `Parse`.
     backend ParseComplete;
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/message_fuzz_tests.rs"]
+mod fuzz_tests;

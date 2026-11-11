@@ -9,6 +9,10 @@ use crate::io::{AsyncRead, AsyncReadExt, ProtocolDecode, ProtocolEncode};
 // Tokio, async-std, and std all use this as the default capacity for their buffered I/O.
 const DEFAULT_BUF_SIZE: usize = 8192;
 
+/// The most a read reserves ahead of the bytes that arrived: a message length comes from the
+/// server, and a forged one must not reserve gigabytes before any of it is sent.
+const MAX_READ_AHEAD: usize = 1 << 20;
+
 pub struct BufferedSocket<S> {
     socket: S,
     write_buf: WriteBuffer,
@@ -283,7 +287,7 @@ impl ReadBuffer {
         // Because of how `BytesMut` works, we should only be shifting capacity back and forth
         // between `read` and `available` unless we have to read an oversize message.
         while self.read.len() < len {
-            self.reserve(len - self.read.len());
+            self.reserve(cmp::min(len - self.read.len(), MAX_READ_AHEAD));
 
             let read = socket.read(&mut self.available).await?;
 

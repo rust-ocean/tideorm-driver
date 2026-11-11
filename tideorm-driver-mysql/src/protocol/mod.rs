@@ -62,3 +62,7 @@ pub(crate) mod text {
     pub(crate) use column::{ColumnDefinition, ColumnFlags, ColumnType, ExtendedType};
     pub(crate) use row::TextRow;
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/protocol_fuzz_tests.rs"]
+mod fuzz_tests;

@@ -60,3 +60,13 @@ fn ssl_mode_takes_mysqls_names_in_any_case() {
         assert!(matches!(error, Error::Configuration(_)), "{query}: {error}");
     }
 }
+
+#[test]
+fn debug_leaves_the_password_and_client_key_out() {
+    let options =
+        parse("mysql://app:s3cret-pw@db/app").ssl_client_key_from_pem("PRIVATE-KEY-BYTES");
+    let shown = format!("{options:?}");
+    assert!(shown.contains("password: Some(\"<redacted>\")"), "{shown}");
+    assert!(!shown.contains("s3cret-pw"), "{shown}");
+    assert!(!shown.contains("80, 82, 73"), "the key's bytes: {shown}");
+}

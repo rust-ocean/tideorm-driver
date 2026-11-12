@@ -18,7 +18,7 @@ mod pgpass;
 mod ssl_mode;
 
 #[doc = include_str!("doc.md")]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PgConnectOptions {
     pub(crate) host: String,
     pub(crate) port: u16,
@@ -34,6 +34,32 @@ pub struct PgConnectOptions {
     pub(crate) application_name: Option<String>,
     pub(crate) extra_float_digits: Option<Cow<'static, str>>,
     pub(crate) options: Option<String>,
+}
+
+/// Leaves the password and the client key out: `{:?}` is how
+/// configuration ends up in logs.
+impl std::fmt::Debug for PgConnectOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PgConnectOptions")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("socket", &self.socket)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("database", &self.database)
+            .field("ssl_mode", &self.ssl_mode)
+            .field("ssl_root_cert", &self.ssl_root_cert)
+            .field("ssl_client_cert", &self.ssl_client_cert)
+            .field(
+                "ssl_client_key",
+                &self.ssl_client_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("statement_cache_capacity", &self.statement_cache_capacity)
+            .field("application_name", &self.application_name)
+            .field("extra_float_digits", &self.extra_float_digits)
+            .field("options", &self.options)
+            .finish()
+    }
 }
 
 impl Default for PgConnectOptions {

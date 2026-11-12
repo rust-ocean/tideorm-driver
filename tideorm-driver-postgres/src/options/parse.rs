@@ -93,7 +93,8 @@ impl PgConnectOptions {
                     }
                 }
 
-                _ => tracing::warn!(%key, %value, "ignoring unrecognized connect parameter"),
+                // the value may be a secret under a misspelled key
+                _ => tracing::warn!(%key, "ignoring unrecognized connect parameter"),
             }
         }
 

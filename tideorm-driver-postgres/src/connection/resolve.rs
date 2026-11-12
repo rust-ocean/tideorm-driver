@@ -116,6 +116,23 @@ impl PgConnection {
         }))
     }
 
+    /// Whether this connection can describe every type `parameters` and `rows` name without
+    /// asking the server.
+    pub(super) fn knows_types(
+        &self,
+        parameters: Option<&ParameterDescription>,
+        rows: Option<&RowDescription>,
+    ) -> bool {
+        let parameters = parameters.into_iter().flat_map(|desc| &desc.types);
+        let columns = rows
+            .into_iter()
+            .flat_map(|desc| &desc.fields)
+            .map(|field| &field.data_type_id);
+        parameters
+            .chain(columns)
+            .all(|&oid| self.try_oid_to_type(oid).is_some())
+    }
+
     fn try_table_column(&self, relation_oid: Oid, attribute_no: i16) -> Option<TableColumn> {
         let table_columns = self.inner.cache_table_data.get(&relation_oid)?;
 

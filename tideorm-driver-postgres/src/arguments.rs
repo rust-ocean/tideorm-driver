@@ -73,14 +73,16 @@ impl PgArguments {
         Ok(())
     }
 
-    /// Completes what the encoders left open: runs every patch against its parameter's
-    /// declared type, then writes the OID of every type left as a hole (the connection asks the
-    /// server only for names it has not resolved before).
+    /// Completes what the encoders left open: runs every patch against its parameter's type in
+    /// the statement, `parameters` (the values' own types for a statement parsed with them),
+    /// then writes the OID of every type left as a hole (the connection asks the server only for
+    /// names it has not resolved before).
     pub(crate) async fn apply_patches(
         &mut self,
         conn: &mut PgConnection,
-        parameters: &[PgTypeInfo],
+        parameters: Option<&[PgTypeInfo]>,
     ) -> Result<(), Error> {
+        let parameters = parameters.unwrap_or(&self.types);
         let PgArgumentBuffer {
             buffer,
             patches,

@@ -208,12 +208,11 @@ impl<'r> Decode<'r, Postgres> for PgLTree {
     fn decode(value: PgValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.format() {
             PgValueFormat::Binary => {
-                let bytes = value.as_bytes()?;
-                let version = i8::from_le_bytes([bytes[0]; 1]);
-                if version != 1 {
+                // the version byte, `1`, then the text
+                let Some((1, text)) = value.as_bytes()?.split_first() else {
                     return Err(Box::new(PgLTreeParseError::InvalidLtreeVersion));
-                }
-                Ok(Self::from_str(std::str::from_utf8(&bytes[1..])?)?)
+                };
+                Ok(Self::from_str(std::str::from_utf8(text)?)?)
             }
             PgValueFormat::Text => Ok(Self::from_str(value.as_str()?)?),
         }

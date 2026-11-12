@@ -58,12 +58,15 @@ where
         let mut text = value.as_bytes()?;
 
         if value.format() == PgValueFormat::Binary && value.type_info == PgTypeInfo::JSONB {
-            if text[0] != JSONB_VERSION {
+            let Some((&version, document)) = text.split_first() else {
+                return Err("empty binary JSONB value".into());
+            };
+            if version != JSONB_VERSION {
                 return Err(
-                    format!("unsupported JSONB format version {} (expected 1)", text[0]).into(),
+                    format!("unsupported JSONB format version {version} (expected 1)").into(),
                 );
             }
-            text = &text[1..];
+            text = document;
         }
 
         Ok(Json(serde_json::from_slice(text)?))

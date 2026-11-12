@@ -72,3 +72,7 @@ impl_acquire!(Sqlite, SqliteConnection);
 
 // required because some databases have a different handling of NULL
 impl_encode_for_option!(Sqlite);
+
+#[cfg(test)]
+#[path = "../tests/unit/pool_tests.rs"]
+mod pool_tests;

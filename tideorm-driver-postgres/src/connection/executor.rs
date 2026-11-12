@@ -1,11 +1,9 @@
 use crate::error::Error;
 use crate::executor::{Execute, Executor};
 use crate::io::{PortalId, StatementId};
-use crate::message::{
-    self, BackendMessageFormat, Bind, Close, CommandComplete, DataRow, ParameterDescription, Parse,
-    ParseComplete, RowDescription,
-};
+use crate::message::{self, BackendMessageFormat, Bind, Close, CommandComplete, DataRow, Parse};
 use crate::statement::PgStatementMetadata;
+use crate::types::Oid;
 use crate::{
     statement::PgStatement, PgArguments, PgConnection, PgQueryResult, PgRow, PgTypeInfo,
     PgValueFormat, Postgres,
@@ -15,134 +13,10 @@ use driver_core::sql_str::SqlStr;
 use driver_core::Either;
 use futures_core::Stream;
 use futures_util::TryStreamExt;
+use std::collections::VecDeque;
 use std::{future::Future, pin::pin, sync::Arc};
 
-async fn prepare(
-    conn: &mut PgConnection,
-    sql: &str,
-    arg_types: &[PgTypeInfo],
-    metadata: Option<Arc<PgStatementMetadata>>,
-    persistent: bool,
-    resolve_column_origin: bool,
-) -> Result<(StatementId, Arc<PgStatementMetadata>), Error> {
-    let id = if persistent {
-        let id = conn.inner.next_statement_id;
-        conn.inner.next_statement_id = id.next();
-        id
-    } else {
-        StatementId::UNNAMED
-    };
-
-    // build a list of type OIDs to send to the database in the PARSE command
-    // we have not yet started the query sequence, so we are *safe* to cleanly make
-    // additional queries here to get any missing OIDs
-    let param_types = conn.resolve_types(arg_types).await?;
-
-    // flush and wait until we are re-ready
-    conn.wait_until_ready().await?;
-
-    // next we send the PARSE command to the server
-    conn.inner.stream.write_msg(Parse {
-        param_types: &param_types,
-        query: sql,
-        statement: id,
-    })?;
-
-    if metadata.is_none() {
-        // get the statement columns and parameters
-        conn.inner
-            .stream
-            .write_msg(message::Describe::Statement(id))?;
-    }
-
-    // we ask for the server to immediately send us the result of the PARSE command
-    conn.write_sync();
-    conn.inner.stream.flush().await?;
-
-    // indicates that the SQL query string is now successfully parsed and has semantic validity
-    conn.inner.stream.recv_expect::<ParseComplete>().await?;
-
-    let metadata = if let Some(metadata) = metadata {
-        // each SYNC produces one READY FOR QUERY
-        conn.recv_ready_for_query().await?;
-
-        // we already have metadata
-        metadata
-    } else {
-        let parameters = recv_desc_params(conn).await?;
-
-        let row_desc = recv_desc_rows(conn).await?;
-
-        // each SYNC produces one READY FOR QUERY
-        conn.recv_ready_for_query().await?;
-
-        let metadata = conn
-            .resolve_statement_metadata::<true>(Some(parameters), row_desc, resolve_column_origin)
-            .await?;
-
-        // ensure that if we did fetch custom data, we wait until we are fully ready before
-        // continuing
-        conn.wait_until_ready().await?;
-
-        metadata
-    };
-
-    Ok((id, metadata))
-}
-
-async fn recv_desc_params(conn: &mut PgConnection) -> Result<ParameterDescription, Error> {
-    conn.inner.stream.recv_expect().await
-}
-
-async fn recv_desc_rows(conn: &mut PgConnection) -> Result<Option<RowDescription>, Error> {
-    let rows: Option<RowDescription> = match conn.inner.stream.recv().await? {
-        // describes the rows that will be returned when the statement is eventually executed
-        message if message.format == BackendMessageFormat::RowDescription => {
-            Some(message.decode()?)
-        }
-
-        // no data would be returned if this statement was executed
-        message if message.format == BackendMessageFormat::NoData => None,
-
-        message => {
-            return Err(err_protocol!(
-                "expecting RowDescription or NoData but received {:?}",
-                message.format
-            ));
-        }
-    };
-
-    Ok(rows)
-}
-
 impl PgConnection {
-    // wait for CloseComplete to indicate a statement was closed
-    pub(super) async fn wait_for_close_complete(&mut self, mut count: usize) -> Result<(), Error> {
-        // we need to wait for the [CloseComplete] to be returned from the server
-        while count > 0 {
-            match self.inner.stream.recv().await? {
-                message if message.format == BackendMessageFormat::PortalSuspended => {
-                    // there was an open portal
-                    // this can happen if the last time a statement was used it was not fully executed
-                }
-
-                message if message.format == BackendMessageFormat::CloseComplete => {
-                    // successfully closed the statement (and freed up the server resources)
-                    count -= 1;
-                }
-
-                message => {
-                    return Err(err_protocol!(
-                        "expecting PortalSuspended or CloseComplete but received {:?}",
-                        message.format
-                    ));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     #[inline(always)]
     pub(crate) fn write_sync(&mut self) {
         self.inner
@@ -154,45 +28,64 @@ impl PgConnection {
         self.inner.pending_ready_for_query_count += 1;
     }
 
-    async fn get_or_prepare(
+    /// Parse `sql` as `statement` with `param_types`, asking for its description when
+    /// `describe`.
+    pub(super) fn write_parse(
         &mut self,
+        statement: StatementId,
+        param_types: &[Oid],
         sql: &str,
-        parameters: &[PgTypeInfo],
-        persistent: bool,
-        // optional metadata that was provided by the user, this means they are reusing
-        // a statement object
-        metadata: Option<Arc<PgStatementMetadata>>,
-        resolve_column_origin: bool,
-    ) -> Result<(StatementId, Arc<PgStatementMetadata>), Error> {
-        if let Some(statement) = self.inner.cache_statement.get_mut(sql) {
-            return Ok((*statement).clone());
+        describe: bool,
+    ) -> Result<(), Error> {
+        self.inner.stream.write_msg(Parse {
+            param_types,
+            query: sql,
+            statement,
+        })?;
+        if describe {
+            self.inner
+                .stream
+                .write_msg(message::Describe::Statement(statement))?;
         }
-        // Without a cache a named statement would never be closed.
-        let persistent = persistent && self.inner.cache_statement.is_enabled();
+        Ok(())
+    }
 
-        let statement = prepare(
-            self,
-            sql,
-            parameters,
-            metadata,
-            persistent,
-            resolve_column_origin,
-        )
-        .await?;
+    /// Bind `params` to `statement` and execute it in the unnamed portal.
+    /// The caller writes the `Sync` that ends the cycle.
+    fn write_execution(
+        &mut self,
+        statement: StatementId,
+        num_params: u16,
+        params: &[u8],
+    ) -> Result<(), Error> {
+        self.inner.stream.write_msg(Bind {
+            portal: PortalId::UNNAMED,
+            statement,
+            formats: &[PgValueFormat::Binary],
+            num_params,
+            params,
+            result_formats: &[PgValueFormat::Binary],
+        })?;
 
-        if persistent {
-            if let Some((id, _)) = self.inner.cache_statement.insert(sql, statement.clone()) {
-                self.inner.stream.write_msg(Close::Statement(id))?;
-                self.write_sync();
+        // executes the portal up to the passed limit
+        // the protocol-level limit acts nearly identically to the `LIMIT` in SQL
+        self.inner.stream.write_msg(message::Execute {
+            portal: PortalId::UNNAMED,
+            // Non-zero limits cause query plan pessimization by disabling parallel workers.
+            limit: 0,
+        })?;
+        // From https://www.postgresql.org/docs/current/protocol-flow.html:
+        //
+        // "An unnamed portal is destroyed at the end of the transaction, or as
+        // soon as the next Bind statement specifying the unnamed portal as
+        // destination is issued. (Note that a simple Query message also
+        // destroys the unnamed portal."
 
-                self.inner.stream.flush().await?;
-
-                self.wait_for_close_complete(1).await?;
-                self.recv_ready_for_query().await?;
-            }
-        }
-
-        Ok(statement)
+        // we ask the database server to close the unnamed portal and free the associated resources
+        // earlier - after the execution of the current query.
+        self.inner
+            .stream
+            .write_msg(Close::Portal(PortalId::UNNAMED))
     }
 
     pub(crate) async fn run<'e, 'c: 'e, 'q: 'e>(
@@ -202,12 +95,15 @@ impl PgConnection {
         persistent: bool,
         metadata_opt: Option<Arc<PgStatementMetadata>>,
     ) -> Result<impl Stream<Item = Result<Either<PgQueryResult, PgRow>, Error>> + 'e, Error> {
-        let sql = query.as_str();
-
         // before we continue, wait until we are "ready" to accept more queries
         self.wait_until_ready().await?;
 
-        let mut metadata: Arc<PgStatementMetadata>;
+        // metadata starts out as "nothing"
+        let mut metadata = Arc::new(PgStatementMetadata::default());
+        // A statement parsed in this round trip is described in it too, ahead of its rows,
+        // and a named one is cached once described.
+        let mut describing = false;
+        let mut parsed = None;
 
         let format = if let Some(mut arguments) = arguments {
             // Check this before we write anything to the stream.
@@ -222,65 +118,81 @@ impl PgConnection {
                 )
             })?;
 
-            // prepare the statement if this our first time executing it
-            // always return the statement ID here
-            let (statement, metadata_) = self
-                .get_or_prepare(sql, &arguments.types, persistent, metadata_opt, false)
-                .await?;
+            // a statement an earlier prepare left behind closes with this execution
+            if let Some(id) = self.inner.parsing.take() {
+                self.inner.closing.push(id);
+            }
 
-            metadata = metadata_;
-
-            // patch holes created during encoding
-            arguments.apply_patches(self, &metadata.parameters).await?;
+            let cached = self.inner.cache_statement.get_mut(query.as_str()).cloned();
+            let (statement, param_types) = if let Some((id, cached)) = cached {
+                // patch holes created during encoding
+                arguments
+                    .apply_patches(self, Some(&cached.parameters))
+                    .await?;
+                metadata = cached;
+                (id, None)
+            } else {
+                // Without a cache a named statement would never be closed.
+                let id = if persistent && self.inner.cache_statement.is_enabled() {
+                    let id = self.inner.next_statement_id;
+                    self.inner.next_statement_id = id.next();
+                    parsed = Some(id);
+                    // Room is made now, so the statement this one evicts closes
+                    // ahead of its Parse: the server never holds more
+                    // statements than the cache.
+                    let cache = &mut self.inner.cache_statement;
+                    let evicted = if cache.len() == cache.capacity() {
+                        cache.remove_lru()
+                    } else {
+                        None
+                    };
+                    if let Some((evicted, _)) = evicted {
+                        self.inner.closing.push(evicted);
+                    }
+                    id
+                } else {
+                    StatementId::UNNAMED
+                };
+                // Resolving names runs statements of its own, so it comes first.
+                let param_types = self.resolve_types(&arguments.types).await?;
+                // the statement takes the types it is parsed with
+                arguments.apply_patches(self, None).await?;
+                (id, Some(param_types))
+            };
 
             // consume messages till `ReadyForQuery` before bind and execute
             self.wait_until_ready().await?;
 
-            // bind to attach the arguments to the statement and create a portal
-            self.inner.stream.write_msg(Bind {
-                portal: PortalId::UNNAMED,
-                statement,
-                formats: &[PgValueFormat::Binary],
-                num_params,
-                params: &arguments.buffer,
-                result_formats: &[PgValueFormat::Binary],
-            })?;
-
-            // executes the portal up to the passed limit
-            // the protocol-level limit acts nearly identically to the `LIMIT` in SQL
-            self.inner.stream.write_msg(message::Execute {
-                portal: PortalId::UNNAMED,
-                // Non-zero limits cause query plan pessimization by disabling parallel workers.
-                limit: 0,
-            })?;
-            // From https://www.postgresql.org/docs/current/protocol-flow.html:
-            //
-            // "An unnamed portal is destroyed at the end of the transaction, or as
-            // soon as the next Bind statement specifying the unnamed portal as
-            // destination is issued. (Note that a simple Query message also
-            // destroys the unnamed portal."
-
-            // we ask the database server to close the unnamed portal and free the associated resources
-            // earlier - after the execution of the current query.
-            self.inner
-                .stream
-                .write_msg(Close::Portal(PortalId::UNNAMED))?;
-
-            // finally, [Sync] asks postgres to process the messages that we sent and respond with
-            // a [ReadyForQuery] message when it's completely done. Theoretically, we could send
-            // dozens of queries before a [Sync] and postgres can handle that. Execution on the server
-            // is still serial but it would reduce round-trips. Some kind of builder pattern that is
-            // termed batching might suit this.
+            // Statements evicted from the cache close ahead of the Bind: an
+            // error there skips the messages after it, and a Close is allowed
+            // even in a failed transaction.
+            for id in std::mem::take(&mut self.inner.closing) {
+                self.inner.stream.write_msg(Close::Statement(id))?;
+            }
+            let written = match param_types {
+                Some(param_types) => {
+                    // closed with a later execution if no description caches it
+                    self.inner.parsing = parsed;
+                    describing = metadata_opt.is_none();
+                    if let Some(given) = &metadata_opt {
+                        metadata = Arc::clone(given);
+                    }
+                    self.write_parse(statement, &param_types, query.as_str(), describing)
+                }
+                None => Ok(()),
+            }
+            .and_then(|()| self.write_execution(statement, num_params, &arguments.buffer));
+            // [Sync] asks postgres to process the messages we sent and answer
+            // with a [ReadyForQuery] once done; it is written even after a
+            // refused write, to end the cycle the Closes began.
             self.write_sync();
+            written?;
 
             // prepared statements are binary
             PgValueFormat::Binary
         } else {
             // Query will trigger a ReadyForQuery
-            self.queue_simple_query(sql)?;
-
-            // metadata starts out as "nothing"
-            metadata = Arc::new(PgStatementMetadata::default());
+            self.queue_simple_query(query.as_str())?;
 
             // and unprepared statements are text
             PgValueFormat::Text
@@ -289,10 +201,64 @@ impl PgConnection {
         self.inner.stream.flush().await?;
 
         Ok(try_stream! {
+            let mut parameters = None;
+            // the rest of a reply read before its statement's types could be looked up
+            let mut held = VecDeque::new();
+            let mut ended = false;
             loop {
-                let message = self.inner.stream.recv().await?;
+                let message = match held.pop_front() {
+                    Some(message) => message,
+                    None if ended => break,
+                    None => self.inner.stream.recv().await?,
+                };
 
                 match message.format {
+                    // a statement the caller described itself is cached once parsed
+                    BackendMessageFormat::ParseComplete if !describing => {
+                        if let Some(id) = parsed.take() {
+                            self.remember_statement(query.as_str(), id, &metadata);
+                        }
+                    }
+
+                    BackendMessageFormat::ParameterDescription if describing => {
+                        parameters = Some(message.decode()?);
+                    }
+
+                    BackendMessageFormat::RowDescription | BackendMessageFormat::NoData
+                        if describing =>
+                    {
+                        describing = false;
+                        let rows = match message.format {
+                            BackendMessageFormat::RowDescription => Some(message.decode()?),
+                            _ => None,
+                        };
+                        let parameters = parameters.take();
+                        metadata = if self.knows_types(parameters.as_ref(), rows.as_ref()) {
+                            self.resolve_statement_metadata::<false>(parameters, rows, false)
+                                .await?
+                        } else {
+                            // Looking types up runs statements of its own, so the rest of
+                            // this reply is read first and handed on after.
+                            loop {
+                                let message = self.inner.stream.recv().await?;
+                                if message.format == BackendMessageFormat::ReadyForQuery {
+                                    self.handle_ready_for_query()?;
+                                    ended = true;
+                                    break;
+                                }
+                                held.push_back(message);
+                            }
+                            let resolved = self
+                                .resolve_statement_metadata::<true>(parameters, rows, false)
+                                .await?;
+                            self.wait_until_ready().await?;
+                            resolved
+                        };
+                        if let Some(id) = parsed.take() {
+                            self.remember_statement(query.as_str(), id, &metadata);
+                        }
+                    }
+
                     BackendMessageFormat::BindComplete
                     | BackendMessageFormat::ParseComplete
                     | BackendMessageFormat::ParameterDescription
@@ -447,6 +413,8 @@ impl<'c> Executor<'c> for &'c mut PgConnection {
         let (_, metadata) = self
             .get_or_prepare(sql.as_str(), parameters, true, None, true)
             .await?;
+        // no execution follows to carry the Close of an evicted statement
+        self.close_evicted().await?;
 
         Ok(PgStatement { sql, metadata })
     }

@@ -38,6 +38,7 @@ mod handle;
 
 pub(crate) mod deserialize;
 
+mod rendezvous_oneshot;
 mod worker;
 
 /// A connection to an open [Sqlite] database.
@@ -250,6 +251,10 @@ impl Connection for SqliteConnection {
 
     #[doc(hidden)]
     async fn flush(&mut self) -> Result<(), Error> {
+        // a pool return after each statement then needs no round trip to the worker
+        if self.worker.is_idle() {
+            return Ok(());
+        }
         self.worker.ping().await
     }
 }

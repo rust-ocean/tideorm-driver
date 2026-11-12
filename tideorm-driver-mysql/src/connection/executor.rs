@@ -19,7 +19,7 @@ use driver_core::sql_str::SqlStr;
 use either::Either;
 use futures_core::Stream;
 use futures_util::TryStreamExt;
-use std::{future::Future, pin::pin, sync::Arc};
+use std::{pin::pin, sync::Arc};
 
 impl MySqlConnection {
     async fn prepare_statement(
@@ -280,28 +280,27 @@ impl<'c> Executor<'c> for &'c mut MySqlConnection {
         }
     }
 
-    fn fetch_optional<'e, 'q, E>(
-        self,
-        query: E,
-    ) -> impl Future<Output = Result<Option<MySqlRow>, Error>> + Send + 'e
+    async fn fetch_optional<'e, 'q, E>(self, query: E) -> Result<Option<MySqlRow>, Error>
     where
         'c: 'e,
         E: Execute<'q, Self::Database>,
         'q: 'e,
         E: 'q,
     {
-        let s = self.fetch_many(query);
-
-        async move {
-            let mut s = pin!(s);
+        let mut row = None;
+        {
+            let mut s = pin!((&mut *self).fetch_many(query));
             while let Some(v) = s.try_next().await? {
                 if let Either::Right(r) = v {
-                    return Ok(Some(r));
+                    row = Some(r);
+                    break;
                 }
             }
-
-            Ok(None)
         }
+        // Read the rest of the reply now, without decoding it, so an error the
+        // server sends after the first row fails this statement, not the next.
+        self.inner.stream.wait_until_ready().await?;
+        Ok(row)
     }
 
     async fn prepare_with<'e>(

@@ -90,37 +90,22 @@ impl VirtualStatement {
             }
 
             if let Some(statement) = prepare(conn.as_ptr(), &mut self.tail, self.persistent)? {
-                let num = statement.column_count();
-
-                let mut columns = Vec::with_capacity(num);
-                let mut column_names = HashMap::with_capacity(num);
-
-                for i in 0..num {
-                    let name: UStr = statement.column_name(i).to_owned().into();
-                    let declared_type = statement.column_decltype(i).map(UStr::new);
-                    let type_info = declared_type
-                        .as_deref()
-                        .and_then(|decl| decl.parse::<DataType>().ok())
-                        .map_or_else(|| statement.column_type_info(i), SqliteTypeInfo);
-
-                    columns.push(SqliteColumn {
-                        ordinal: i,
-                        name: name.clone(),
-                        type_info,
-                        declared_type,
-                        origin: statement.column_origin(i),
-                    });
-
-                    column_names.insert(name, i);
-                }
-
+                let (columns, column_names) = describe(&statement);
                 self.handles.push(statement);
-                self.columns.push(Arc::new(columns));
-                self.column_names.push(Arc::new(column_names));
+                self.columns.push(columns);
+                self.column_names.push(column_names);
             }
         }
 
         Ok(self.current())
+    }
+
+    /// Describe the current statement's columns again, after a schema change
+    /// re-prepared it with another number of them (a `SELECT *`).
+    pub(crate) fn describe_current_again(&mut self) {
+        if let Some(idx) = self.index.filter(|&idx| idx < self.handles.len()) {
+            (self.columns[idx], self.column_names[idx]) = describe(&self.handles[idx]);
+        }
     }
 
     pub fn current(&mut self) -> Option<PreparedStatement<'_>> {
@@ -149,6 +134,34 @@ impl VirtualStatement {
 
         Ok(())
     }
+}
+
+fn describe(statement: &StatementHandle) -> (Arc<Vec<SqliteColumn>>, Arc<HashMap<UStr, usize>>) {
+    let num = statement.column_count();
+
+    let mut columns = Vec::with_capacity(num);
+    let mut column_names = HashMap::with_capacity(num);
+
+    for i in 0..num {
+        let name: UStr = statement.column_name(i).to_owned().into();
+        let declared_type = statement.column_decltype(i).map(UStr::new);
+        let type_info = declared_type
+            .as_deref()
+            .and_then(|decl| decl.parse::<DataType>().ok())
+            .map_or_else(|| statement.column_type_info(i), SqliteTypeInfo);
+
+        columns.push(SqliteColumn {
+            ordinal: i,
+            name: name.clone(),
+            type_info,
+            declared_type,
+            origin: statement.column_origin(i),
+        });
+
+        column_names.insert(name, i);
+    }
+
+    (Arc::new(columns), Arc::new(column_names))
 }
 
 fn prepare(

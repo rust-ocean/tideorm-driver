@@ -267,3 +267,28 @@ fn a_forged_column_count_reserves_nothing_absurd() {
         fuzz(22, 0, &replies, |reply| read_reply(reply, binary));
     }
 }
+
+/// `fetch_optional` reads the whole reply before it returns its first row, so an error the
+/// server sends after that row fails this statement and the connection is left ready.
+#[test]
+fn fetch_optional_reports_an_error_sent_after_its_first_row() {
+    driver_core::rt::test_block_on(async {
+        let head = [packet(&[1]), definition(), packet(&[1, b'x'])].concat();
+        for (tail, fails) in [
+            (
+                packet(b"\xff\x28\x04#70100Query execution was interrupted"),
+                true,
+            ),
+            (
+                [packet(&[1, b'y']), packet(&[0xfe, 0, 0, 2, 0, 0, 0])].concat(),
+                false,
+            ),
+        ] {
+            let (mut conn, input) = connection(10);
+            *input.lock().unwrap() = [&head[..], &tail[..]].concat();
+            let result = (&mut conn).fetch_optional("SELECT a FROM t").await;
+            assert_eq!(result.is_err(), fails, "{:?}", result.as_ref().err());
+            assert!(conn.inner.stream.waiting.is_empty());
+        }
+    });
+}

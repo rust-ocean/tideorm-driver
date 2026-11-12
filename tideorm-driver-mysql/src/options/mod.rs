@@ -55,7 +55,7 @@ pub use ssl_mode::MySqlSslMode;
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MySqlConnectOptions {
     pub(crate) host: String,
     pub(crate) port: u16,
@@ -75,6 +75,36 @@ pub struct MySqlConnectOptions {
     pub(crate) no_engine_substitution: bool,
     pub(crate) timezone: Option<String>,
     pub(crate) set_names: bool,
+}
+
+/// Leaves the password and the client key out: `{:?}` is how
+/// configuration ends up in logs.
+impl std::fmt::Debug for MySqlConnectOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MySqlConnectOptions")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("socket", &self.socket)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("database", &self.database)
+            .field("ssl_mode", &self.ssl_mode)
+            .field("ssl_ca", &self.ssl_ca)
+            .field("ssl_client_cert", &self.ssl_client_cert)
+            .field(
+                "ssl_client_key",
+                &self.ssl_client_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("statement_cache_capacity", &self.statement_cache_capacity)
+            .field("charset", &self.charset)
+            .field("collation", &self.collation)
+            .field("pipes_as_concat", &self.pipes_as_concat)
+            .field("enable_cleartext_plugin", &self.enable_cleartext_plugin)
+            .field("no_engine_substitution", &self.no_engine_substitution)
+            .field("timezone", &self.timezone)
+            .field("set_names", &self.set_names)
+            .finish()
+    }
 }
 
 impl Default for MySqlConnectOptions {

@@ -61,7 +61,7 @@ impl Encode<'_, Sqlite> for Hyphenated {
 impl Decode<'_, Sqlite> for Hyphenated {
     fn decode(value: SqliteValueRef<'_>) -> Result<Self, BoxDynError> {
         let uuid: Result<Uuid, BoxDynError> =
-            Uuid::parse_str(&value.text_borrowed().map(ToOwned::to_owned)?).map_err(Into::into);
+            Uuid::parse_str(value.text_borrowed()?).map_err(Into::into);
 
         Ok(uuid?.hyphenated())
     }
@@ -84,7 +84,7 @@ impl Encode<'_, Sqlite> for Simple {
 impl Decode<'_, Sqlite> for Simple {
     fn decode(value: SqliteValueRef<'_>) -> Result<Self, BoxDynError> {
         let uuid: Result<Uuid, BoxDynError> =
-            Uuid::parse_str(&value.text_borrowed().map(ToOwned::to_owned)?).map_err(Into::into);
+            Uuid::parse_str(value.text_borrowed()?).map_err(Into::into);
 
         Ok(uuid?.simple())
     }

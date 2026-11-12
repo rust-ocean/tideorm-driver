@@ -6,7 +6,7 @@ use driver_core::executor::{Execute, Executor};
 use driver_core::sql_str::SqlStr;
 use driver_core::Either;
 use futures_core::Stream;
-use futures_util::{TryFutureExt, TryStreamExt};
+use futures_util::{StreamExt, TryFutureExt, TryStreamExt};
 use std::{future::Future, pin::pin};
 
 impl<'c> Executor<'c> for &'c mut SqliteConnection {
@@ -33,7 +33,7 @@ impl<'c> Executor<'c> for &'c mut SqliteConnection {
                 .execute(sql, arguments, self.row_channel_size, persistent, None)
                 .await
         }
-        .map_ok(flume::Receiver::into_stream)
+        .map_ok(|rows| rows.into_stream().flat_map(futures_util::stream::iter))
         .try_flatten_stream()
     }
 
@@ -57,7 +57,7 @@ impl<'c> Executor<'c> for &'c mut SqliteConnection {
             let mut stream = pin!(self
                 .worker
                 .execute(sql, arguments, self.row_channel_size, persistent, Some(1))
-                .map_ok(flume::Receiver::into_stream)
+                .map_ok(|rows| rows.into_stream().flat_map(futures_util::stream::iter))
                 .try_flatten_stream());
 
             while let Some(res) = stream.try_next().await? {

@@ -123,11 +123,19 @@ impl ExecuteIter<'_> {
         let statement = self.statement.current()?;
 
         match statement.handle.step() {
-            Ok(true) => Some(Ok(Either::Right(SqliteRow::current(
-                statement.handle,
-                statement.columns,
-                statement.column_names,
-            )))),
+            Ok(true) => {
+                // shortcut: a re-prepare that renames a column but keeps their number
+                // keeps the old names; compare the names too if that ever matters.
+                if statement.handle.column_count() != statement.columns.len() {
+                    self.statement.describe_current_again();
+                }
+                let statement = self.statement.current()?;
+                Some(Ok(Either::Right(SqliteRow::current(
+                    statement.handle,
+                    statement.columns,
+                    statement.column_names,
+                ))))
+            }
             Ok(false) => {
                 let last_insert_rowid = self.handle.last_insert_rowid();
 

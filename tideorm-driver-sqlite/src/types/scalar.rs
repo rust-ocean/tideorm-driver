@@ -81,12 +81,13 @@ impl_encode! {
     f32 => |v| Double((*v).into());
     f64 => |v| Double(*v);
 
-    &'_ str => |v| Text(Arc::new(v.to_string()));
-    Box<str> => |v| Text(Arc::new(v.to_string())), move TextSlice(Arc::from(v));
-    String => |v| Text(Arc::new(v.clone())), move Text(Arc::new(v));
-    Cow<'_, str> => |v| Text(Arc::new(v.to_string())), move Text(Arc::new(v.into()));
-    Arc<str> => |v| Text(Arc::new(v.to_string())), move TextSlice(v);
-    Rc<str> => |v| Text(Arc::new(v.to_string()));
+    // borrowed text is copied once, into the `Arc<str>` itself
+    &'_ str => |v| TextSlice(Arc::from(*v));
+    Box<str> => |v| TextSlice(Arc::from(&**v)), move TextSlice(Arc::from(v));
+    String => |v| TextSlice(Arc::from(v.as_str())), move Text(Arc::new(v));
+    Cow<'_, str> => |v| TextSlice(Arc::from(&**v)), move Text(Arc::new(v.into()));
+    Arc<str> => |v| TextSlice(Arc::clone(v)), move TextSlice(v);
+    Rc<str> => |v| TextSlice(Arc::from(&**v));
 
     &'_ [u8] => |v| Blob(Arc::new(v.to_vec()));
     Box<[u8]> => |v| Blob(Arc::new(v.to_vec())), move Blob(Arc::new(v.into_vec()));

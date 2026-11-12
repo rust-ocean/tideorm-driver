@@ -17,6 +17,7 @@ use driver_core::Either;
 
 use crate::connection::establish::EstablishParams;
 use crate::connection::execute;
+use crate::connection::rendezvous_oneshot;
 use crate::connection::ConnectionState;
 use crate::{SqliteArguments, SqliteQueryResult, SqliteRow, SqliteStatement};
 
@@ -26,6 +27,7 @@ use crate::connection::deserialize::{deserialize, serialize, SchemaName, SqliteO
 
 pub(crate) struct ConnectionWorker {
     command_tx: flume::Sender<(Command, tracing::Span)>,
+    sent_commands: usize,
     /// Mutex for locking access to the database.
     pub(crate) shared: Arc<WorkerSharedState>,
 }
@@ -34,6 +36,8 @@ pub(crate) struct WorkerSharedState {
     transaction_depth: AtomicUsize,
     in_transaction: AtomicBool,
     cached_statements_size: AtomicUsize,
+    /// Commands the worker has handled, stored after the transaction state.
+    handled_commands: AtomicUsize,
     pub(crate) main_file: Option<PathBuf>,
     pub(crate) conn: Mutex<ConnectionState>,
 }
@@ -73,6 +77,9 @@ impl WorkerSharedState {
     }
 }
 
+/// One result or row of a statement, or the error that ended it.
+pub(crate) type ExecuteItem = Result<Either<SqliteQueryResult, SqliteRow>, Error>;
+
 enum Command {
     Prepare {
         query: SqlStr,
@@ -82,8 +89,10 @@ enum Command {
         query: SqlStr,
         arguments: Option<SqliteArguments>,
         persistent: bool,
-        tx: flume::Sender<Result<Either<SqliteQueryResult, SqliteRow>, Error>>,
+        tx: flume::Sender<Vec<ExecuteItem>>,
         limit: Option<usize>,
+        /// The most rows one message carries.
+        batch: usize,
     },
     Serialize {
         schema: Option<SchemaName>,
@@ -138,6 +147,7 @@ impl ConnectionWorker {
                     transaction_depth: AtomicUsize::new(0),
                     in_transaction: AtomicBool::new(conn.handle.in_transaction()),
                     cached_statements_size: AtomicUsize::new(0),
+                    handled_commands: AtomicUsize::new(0),
                     main_file: conn.handle.main_file(),
                     // note: must be fair because in `Command::UnlockDb` we unlock the mutex
                     // and then immediately try to relock it; an unfair mutex would immediately
@@ -149,6 +159,7 @@ impl ConnectionWorker {
                 if establish_tx
                     .send(Ok(Self {
                         command_tx,
+                        sent_commands: 0,
                         shared: Arc::clone(&shared),
                     }))
                     .is_err()
@@ -161,9 +172,15 @@ impl ConnectionWorker {
                 // would rollback an already completed transaction.
                 let mut ignore_next_start_rollback = false;
 
-                for (cmd, span) in command_rx {
-                    let _guard = span.enter();
+                let mut handled = 0usize;
+                loop {
                     shared.update_transaction_state(&conn.handle);
+                    shared.handled_commands.store(handled, Ordering::Release);
+                    let Ok((cmd, span)) = command_rx.recv() else {
+                        break;
+                    };
+                    handled = handled.wrapping_add(1);
+                    let _guard = span.enter();
                     match cmd {
                         Command::Prepare { query, tx } => {
                             tx.send(shared.ensure_transaction_active().and_then(|_| prepare(&mut conn, query))).ok();
@@ -180,47 +197,49 @@ impl ConnectionWorker {
                             arguments,
                             persistent,
                             tx,
-                            limit
+                            limit,
+                            batch,
                         } => {
                             let iter = match execute::iter(&mut conn, &shared, query, arguments, persistent)
                             {
                                 Ok(iter) => iter,
                                 Err(e) => {
-                                    tx.send(Err(e)).ok();
+                                    tx.send(vec![Err(e)]).ok();
                                     continue;
                                 }
                             };
 
-                            match limit {
-                                None => {
-                                    for res in iter {
-                                        let has_error = res.is_err();
-                                        if tx.send(res).is_err() || has_error {
-                                            break;
-                                        }
+                            // Rows go out in messages of 1, 2, 4, .. up to `batch` rows: the
+                            // first row is not held back, and a long result pays for one
+                            // channel handoff per batch instead of one per row.
+                            let mut iter = iter;
+                            let mut rows = Vec::with_capacity(1);
+                            let mut size = 1;
+                            let mut rows_returned = 0;
+                            for res in iter.by_ref() {
+                                let last = match &res {
+                                    Err(_) => true,
+                                    Ok(Either::Right(_)) => {
+                                        rows_returned += 1;
+                                        limit.is_some_and(|limit| rows_returned >= limit)
                                     }
-                                },
-                                Some(limit) => {
-                                    let mut iter = iter;
-                                    let mut rows_returned = 0;
-
-                                    while let Some(res) = iter.next() {
-                                        if let Ok(ok) = &res {
-                                            if ok.is_right() {
-                                                rows_returned += 1;
-                                                if rows_returned >= limit {
-                                                    drop(iter);
-                                                    let _ = tx.send(res);
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        let has_error = res.is_err();
-                                        if tx.send(res).is_err() || has_error {
-                                            break;
-                                        }
+                                    Ok(Either::Left(_)) => false,
+                                };
+                                rows.push(res);
+                                if last {
+                                    break;
+                                }
+                                if rows.len() >= size {
+                                    size = (size * 2).min(batch);
+                                    let full = std::mem::replace(&mut rows, Vec::with_capacity(size));
+                                    if tx.send(full).is_err() {
+                                        break;
                                     }
-                                },
+                                }
+                            }
+                            drop(iter);
+                            if !rows.is_empty() {
+                                let _ = tx.send(rows);
                             }
 
                             update_cached_statements_size(&conn, &shared.cached_statements_size);
@@ -381,22 +400,20 @@ impl ConnectionWorker {
         chan_size: usize,
         persistent: bool,
         limit: Option<usize>,
-    ) -> Result<flume::Receiver<Result<Either<SqliteQueryResult, SqliteRow>, Error>>, Error> {
-        let (tx, rx) = flume::bounded(chan_size);
+    ) -> Result<flume::Receiver<Vec<ExecuteItem>>, Error> {
+        // `chan_size` rows at most wait in the channel, in messages of up to 64
+        let batch = chan_size.clamp(1, 64);
+        let (tx, rx) = flume::bounded(chan_size / batch);
 
-        self.command_tx
-            .send_async((
-                Command::Execute {
-                    query,
-                    arguments: args,
-                    persistent,
-                    tx,
-                    limit,
-                },
-                Span::current(),
-            ))
-            .await
-            .map_err(|_| Error::WorkerCrashed)?;
+        self.send(Command::Execute {
+            query,
+            arguments: args,
+            persistent,
+            tx,
+            limit,
+            batch,
+        })
+        .await?;
 
         Ok(rx)
     }
@@ -419,7 +436,24 @@ impl ConnectionWorker {
     pub(crate) fn start_rollback(&mut self) -> Result<(), Error> {
         self.command_tx
             .send((Command::Rollback { tx: None }, Span::current()))
-            .map_err(|_| Error::WorkerCrashed)
+            .map_err(|_| Error::WorkerCrashed)?;
+        self.sent_commands = self.sent_commands.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Whether the worker has handled every command sent to it, so the transaction
+    /// state it published is current.
+    pub(crate) fn is_idle(&self) -> bool {
+        self.shared.handled_commands.load(Ordering::Acquire) == self.sent_commands
+    }
+
+    async fn send(&mut self, command: Command) -> Result<(), Error> {
+        self.command_tx
+            .send_async((command, Span::current()))
+            .await
+            .map_err(|_| Error::WorkerCrashed)?;
+        self.sent_commands = self.sent_commands.wrapping_add(1);
+        Ok(())
     }
 
     pub(crate) async fn ping(&mut self) -> Result<(), Error> {
@@ -455,10 +489,7 @@ impl ConnectionWorker {
     {
         let (tx, rx) = oneshot::channel();
 
-        self.command_tx
-            .send_async((command(tx), Span::current()))
-            .await
-            .map_err(|_| Error::WorkerCrashed)?;
+        self.send(command(tx)).await?;
 
         rx.await.map_err(|_| Error::WorkerCrashed)
     }
@@ -469,10 +500,7 @@ impl ConnectionWorker {
     {
         let (tx, rx) = rendezvous_oneshot::channel();
 
-        self.command_tx
-            .send_async((command(tx), Span::current()))
-            .await
-            .map_err(|_| Error::WorkerCrashed)?;
+        self.send(command(tx)).await?;
 
         rx.recv().await.map_err(|_| Error::WorkerCrashed)
     }
@@ -491,6 +519,7 @@ impl ConnectionWorker {
         .await;
 
         res.map_err(|_| Error::WorkerCrashed)?;
+        self.sent_commands = self.sent_commands.wrapping_add(1);
 
         Ok(guard)
     }
@@ -543,44 +572,4 @@ fn prepare(conn: &mut ConnectionState, query: SqlStr) -> Result<SqliteStatement,
 
 fn update_cached_statements_size(conn: &ConnectionState, size: &AtomicUsize) {
     size.store(conn.statements.len(), Ordering::Release);
-}
-
-/// A oneshot channel whose `send` completes only once the receiver has taken
-/// the value, so the worker learns whether a `BEGIN`, `COMMIT` or `ROLLBACK` it
-/// ran was acknowledged.
-mod rendezvous_oneshot {
-    use super::oneshot::{self, Canceled};
-
-    pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-        let (inner_tx, inner_rx) = oneshot::channel();
-        (Sender { inner: inner_tx }, Receiver { inner: inner_rx })
-    }
-
-    pub struct Sender<T> {
-        inner: oneshot::Sender<(T, oneshot::Sender<()>)>,
-    }
-
-    impl<T> Sender<T> {
-        pub async fn send(self, value: T) -> Result<(), Canceled> {
-            let (ack_tx, ack_rx) = oneshot::channel();
-            self.inner.send((value, ack_tx)).map_err(|_| Canceled)?;
-            ack_rx.await
-        }
-
-        pub fn blocking_send(self, value: T) -> Result<(), Canceled> {
-            futures_executor::block_on(self.send(value))
-        }
-    }
-
-    pub struct Receiver<T> {
-        inner: oneshot::Receiver<(T, oneshot::Sender<()>)>,
-    }
-
-    impl<T> Receiver<T> {
-        pub async fn recv(self) -> Result<T, Canceled> {
-            let (value, ack_tx) = self.inner.await?;
-            ack_tx.send(()).map_err(|_| Canceled)?;
-            Ok(value)
-        }
-    }
 }

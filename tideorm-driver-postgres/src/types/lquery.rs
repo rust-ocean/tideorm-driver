@@ -154,12 +154,11 @@ impl<'r> Decode<'r, Postgres> for PgLQuery {
     fn decode(value: PgValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.format() {
             PgValueFormat::Binary => {
-                let bytes = value.as_bytes()?;
-                let version = i8::from_le_bytes([bytes[0]; 1]);
-                if version != 1 {
+                // the version byte, `1`, then the text
+                let Some((1, text)) = value.as_bytes()?.split_first() else {
                     return Err(Box::new(PgLQueryParseError::InvalidLqueryVersion));
-                }
-                Ok(Self::from_str(std::str::from_utf8(&bytes[1..])?)?)
+                };
+                Ok(Self::from_str(std::str::from_utf8(text)?)?)
             }
             PgValueFormat::Text => Ok(Self::from_str(value.as_str()?)?),
         }
@@ -227,21 +226,23 @@ impl FromStr for PgLQueryLevel {
         } else {
             match bytes[0] {
                 b'*' => {
-                    if bytes.len() > 1 {
-                        let parts = s[2..s.len() - 1].split(',').collect::<Vec<_>>();
-                        match parts.len() {
-                            1 => {
-                                let number = parts[0].parse()?;
-                                Ok(PgLQueryLevel::Star(Some(number), Some(number)))
-                            }
-                            2 => Ok(PgLQueryLevel::Star(
-                                Some(parts[0].parse()?),
-                                Some(parts[1].parse()?),
-                            )),
-                            _ => Err(PgLQueryParseError::UnexpectedCharacter),
+                    if bytes.len() == 1 {
+                        return Ok(PgLQueryLevel::Star(None, None));
+                    }
+                    let bounds = s[1..]
+                        .strip_prefix('{')
+                        .and_then(|bounds| bounds.strip_suffix('}'))
+                        .ok_or(PgLQueryParseError::UnexpectedCharacter)?;
+                    // `*{n}`, or `*{n,m}` where either bound may be left out
+                    match bounds.split_once(',') {
+                        None => {
+                            let number = bounds.parse()?;
+                            Ok(PgLQueryLevel::Star(Some(number), Some(number)))
                         }
-                    } else {
-                        Ok(PgLQueryLevel::Star(None, None))
+                        Some((at_least, at_most)) => Ok(PgLQueryLevel::Star(
+                            optional_bound(at_least)?,
+                            optional_bound(at_most)?,
+                        )),
                     }
                 }
                 b'!' => Ok(PgLQueryLevel::NotNonStar(
@@ -258,6 +259,10 @@ impl FromStr for PgLQueryLevel {
             }
         }
     }
+}
+
+fn optional_bound(bound: &str) -> Result<Option<u16>, std::num::ParseIntError> {
+    (!bound.is_empty()).then(|| bound.parse()).transpose()
 }
 
 impl FromStr for PgLQueryVariant {

@@ -37,3 +37,14 @@ fn test_pg_write_escaped() {
     x.write_char('z').unwrap();
     assert_eq!(buf, r"x\\y\ \\\ z");
 }
+
+#[test]
+fn debug_leaves_the_password_and_client_key_out() {
+    let options = PgConnectOptions::new_without_pgpass()
+        .password("s3cret-pw")
+        .ssl_client_key_from_pem("PRIVATE-KEY-BYTES");
+    let shown = format!("{options:?}");
+    assert!(shown.contains("password: Some(\"<redacted>\")"), "{shown}");
+    assert!(!shown.contains("s3cret-pw"), "{shown}");
+    assert!(!shown.contains("80, 82, 73"), "the key's bytes: {shown}");
+}

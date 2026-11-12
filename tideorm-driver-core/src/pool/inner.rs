@@ -6,14 +6,14 @@ use crate::database::Database;
 use crate::error::Error;
 use crate::pool::close_event::deadline_as_timeout;
 use crate::pool::{CloseEvent, PoolOptions};
-use crossbeam_queue::ArrayQueue;
 
 use crate::sync::{AsyncSemaphore, AsyncSemaphoreReleaser};
 
 use std::cmp;
+use std::collections::VecDeque;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use crate::logger::private_level_filter_to_trace_level;
 use crate::pool::options::PoolConnectionMetadata;
@@ -23,10 +23,12 @@ use tracing::Level;
 
 pub(crate) struct PoolInner<DB: Database> {
     pub(super) connect_options: RwLock<Arc<<DB::Connection as Connection>::Options>>,
-    pub(super) idle_conns: ArrayQueue<Idle<DB>>,
+    /// Longest idle at the front. A checkout takes the most recently released, so a
+    /// light load keeps reusing a few warm connections (no checkout ping, their
+    /// statements prepared) while the others reach `idle_timeout`.
+    idle_conns: Mutex<VecDeque<Idle<DB>>>,
     pub(super) semaphore: AsyncSemaphore,
     pub(super) size: AtomicU32,
-    pub(super) num_idle: AtomicUsize,
     is_closed: AtomicBool,
     pub(super) on_closed: event_listener::Event,
     pub(super) options: PoolOptions<DB>,
@@ -43,10 +45,9 @@ impl<DB: Database> PoolInner<DB> {
 
         let pool = Self {
             connect_options: RwLock::new(Arc::new(connect_options)),
-            idle_conns: ArrayQueue::new(capacity),
+            idle_conns: Mutex::new(VecDeque::with_capacity(capacity)),
             semaphore: AsyncSemaphore::new(capacity),
             size: AtomicU32::new(0),
-            num_idle: AtomicUsize::new(0),
             is_closed: AtomicBool::new(false),
             on_closed: event_listener::Event::new(),
             acquire_time_level: private_level_filter_to_trace_level(options.acquire_time_level),
@@ -66,12 +67,14 @@ impl<DB: Database> PoolInner<DB> {
     }
 
     pub(super) fn num_idle(&self) -> usize {
-        // We don't use `self.idle_conns.len()` as it waits for the internal
-        // head and tail pointers to stop changing for a moment before calculating the length,
-        // which may take a long time at high levels of churn.
-        //
-        // By maintaining our own atomic count, we avoid that issue entirely.
-        self.num_idle.load(Ordering::Acquire)
+        self.idle().len()
+    }
+
+    fn idle(&self) -> MutexGuard<'_, VecDeque<Idle<DB>>> {
+        // held only to push or pop, which leave the queue whole even if they panic
+        self.idle_conns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(super) fn is_closed(&self) -> bool {
@@ -89,11 +92,13 @@ impl<DB: Database> PoolInner<DB> {
         async move {
             let _permits = self.semaphore.acquire(self.options.max_connections).await;
 
-            while let Some(idle) = self.idle_conns.pop() {
+            loop {
+                let Some(idle) = self.idle().pop_front() else {
+                    break;
+                };
                 let _ = idle.live.raw.close().await;
             }
 
-            self.num_idle.store(0, Ordering::Release);
             self.size.store(0, Ordering::Release);
         }
     }
@@ -106,6 +111,11 @@ impl<DB: Database> PoolInner<DB> {
 
     /// Wait for a permit from `self.semaphore`, or fail once the pool closes.
     async fn acquire_permit(self: &Arc<Self>) -> Result<AsyncSemaphoreReleaser<'_>, Error> {
+        // A free permit needs no close listener, an allocation per checkout. Both
+        // semaphores are fair: none is free while a task waits for one.
+        if let Some(permit) = self.semaphore.try_acquire(1) {
+            return Ok(permit);
+        }
         self.close_event().do_until(self.semaphore.acquire(1)).await
     }
 
@@ -120,32 +130,42 @@ impl<DB: Database> PoolInner<DB> {
         self.pop_idle(permit).ok()
     }
 
+    /// Check out the connection idle the longest, for the reaper.
+    fn try_acquire_oldest(self: &Arc<Self>) -> Option<Floating<DB, Idle<DB>>> {
+        if self.is_closed() {
+            return None;
+        }
+
+        let permit = self.semaphore.try_acquire(1)?;
+        let oldest = self.idle().pop_front()?;
+        Some(Floating::from_idle(oldest, (*self).clone(), permit))
+    }
+
     fn pop_idle<'a>(
         self: &'a Arc<Self>,
         permit: AsyncSemaphoreReleaser<'a>,
     ) -> Result<Floating<DB, Idle<DB>>, AsyncSemaphoreReleaser<'a>> {
-        if let Some(idle) = self.idle_conns.pop() {
-            self.num_idle.fetch_sub(1, Ordering::AcqRel);
-            Ok(Floating::from_idle(idle, (*self).clone(), permit))
-        } else {
-            Err(permit)
+        let newest = self.idle().pop_back();
+        match newest {
+            Some(idle) => Ok(Floating::from_idle(idle, (*self).clone(), permit)),
+            None => Err(permit),
         }
     }
 
     pub(super) fn release(&self, floating: Floating<DB, Live<DB>>) {
         // `options.after_release` and other checks are in `PoolConnection::return_to_pool()`.
+        self.release_idle(floating.into_idle());
+    }
 
-        let Floating { inner: idle, guard } = floating.into_idle();
+    /// Put a connection back as the most recently released, its idle time kept.
+    fn release_idle(&self, floating: Floating<DB, Idle<DB>>) {
+        let Floating { inner: idle, guard } = floating;
 
-        if self.idle_conns.push(idle).is_err() {
-            panic!("BUG: connection queue overflow in release()");
-        }
+        self.idle().push_back(idle);
 
         // NOTE: we need to make sure we drop the permit *after* we push to the idle queue
         // don't decrease the size
         guard.release_permit();
-
-        self.num_idle.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Try to atomically increment the pool size for a new connection.
@@ -466,14 +486,16 @@ fn spawn_maintenance_tasks<DB: Database>(pool: &Arc<PoolInner<DB>>) {
                     // open a new one immediately. Note that other connections may be popped from
                     // the queue in the meantime - that's fine, there is no harm in checking more
                     for _ in 0..pool.num_idle() {
-                        if let Some(conn) = pool.try_acquire() {
+                        if let Some(conn) = pool.try_acquire_oldest() {
                             if is_beyond_idle_timeout(&conn, &pool.options)
                                 || is_beyond_max_lifetime(&conn, &pool.options)
                             {
                                 let _ = conn.close().await;
                                 pool.min_connections_maintenance(Some(next_run)).await;
                             } else {
-                                pool.release(conn.into_live());
+                                // Its idle time is kept, or no connection would ever
+                                // reach `idle_timeout`; a full pass leaves the order as it was.
+                                pool.release_idle(conn);
                             }
                         }
                     }

@@ -9,7 +9,7 @@ use crate::common::StatementCache;
 use crate::error::Error;
 use crate::ext::ustr::UStr;
 use crate::io::StatementId;
-use crate::message::{BackendMessageFormat, Close, Query, ReadyForQuery, Terminate};
+use crate::message::{BackendMessageFormat, CopyFail, Query, ReadyForQuery, Terminate};
 use crate::statement::PgStatementMetadata;
 use crate::types::Oid;
 use crate::{PgConnectOptions, PgTypeInfo, Postgres};
@@ -20,6 +20,7 @@ pub use self::stream::PgStream;
 
 mod establish;
 mod executor;
+mod prepare;
 mod resolve;
 mod sasl;
 mod stream;
@@ -55,6 +56,13 @@ pub struct PgConnectionInner {
     // cache statement by query string to the id and columns
     cache_statement: StatementCache<(StatementId, Arc<PgStatementMetadata>)>,
 
+    // statements evicted from the cache and not closed on the server yet
+    closing: Vec<StatementId>,
+
+    // a named statement whose Parse is in flight; if its prepare fails or is
+    // dropped before reading the server's answer, the next prepare closes it
+    parsing: Option<StatementId>,
+
     // cache user-defined types by id <-> info
     cache_type_info: HashMap<Oid, PgTypeInfo>,
     cache_type_oid: HashMap<UStr, Oid>,
@@ -89,15 +97,24 @@ impl PgConnection {
         while self.inner.pending_ready_for_query_count > 0 {
             let message = self.inner.stream.recv().await?;
 
-            if let BackendMessageFormat::ReadyForQuery = message.format {
-                self.handle_ready_for_query()?;
+            match message.format {
+                BackendMessageFormat::ReadyForQuery => self.handle_ready_for_query()?,
+                // a `COPY .. FROM STDIN` whose caller went away before sending any data:
+                // the server waits for the data until the copy ends
+                BackendMessageFormat::CopyInResponse => {
+                    self.inner
+                        .stream
+                        .send(CopyFail::new("COPY abandoned before its data was sent"))
+                        .await?;
+                }
+                _ => {}
             }
         }
 
         Ok(())
     }
 
-    async fn recv_ready_for_query(&mut self) -> Result<(), Error> {
+    pub(crate) async fn recv_ready_for_query(&mut self) -> Result<(), Error> {
         let _: ReadyForQuery = self.inner.stream.recv_expect().await?;
 
         self.inner.pending_ready_for_query_count -= 1;
@@ -176,24 +193,12 @@ impl Connection for PgConnection {
     async fn clear_cached_statements(&mut self) -> Result<(), Error> {
         self.inner.cache_type_oid.clear();
 
-        let mut cleared = 0_usize;
-
         self.wait_until_ready().await?;
 
         while let Some((id, _)) = self.inner.cache_statement.remove_lru() {
-            self.inner.stream.write_msg(Close::Statement(id))?;
-            cleared += 1;
+            self.inner.closing.push(id);
         }
-
-        if cleared > 0 {
-            self.write_sync();
-            self.inner.stream.flush().await?;
-
-            self.wait_for_close_complete(cleared).await?;
-            self.recv_ready_for_query().await?;
-        }
-
-        Ok(())
+        self.close_evicted().await
     }
 
     fn shrink_buffers(&mut self) {

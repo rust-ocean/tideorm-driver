@@ -1,9 +1,10 @@
 use crate::MySqlConnectOptions;
 
-/// The `sql_mode` assignment every connection makes, adding `added`.
+/// The `sql_mode` and `group_concat_max_len` assignments every connection
+/// makes, adding `added` to the mode.
 fn mode(added: &str) -> String {
     format!(
-        "sql_mode=(SELECT TRIM(BOTH ',' FROM REPLACE(CONCAT(',', @@sql_mode, '{added},'), ',NO_BACKSLASH_ESCAPES,', ',')))"
+        "sql_mode=(SELECT TRIM(BOTH ',' FROM REPLACE(CONCAT(',', @@sql_mode, '{added},'), ',NO_BACKSLASH_ESCAPES,', ','))),group_concat_max_len=4294967295"
     )
 }
 

@@ -124,6 +124,12 @@ impl PgConnection {
             }
 
             let cached = self.inner.cache_statement.get_mut(query.as_str()).cloned();
+            // A statement parsed for other parameter types would read these values' bytes
+            // as its own types, so such a run parses an unnamed statement of its own.
+            let other_types = cached
+                .as_ref()
+                .is_some_and(|(_, cached)| !takes_types(&cached.parameters, &arguments.types));
+            let cached = cached.filter(|_| !other_types);
             let (statement, param_types) = if let Some((id, cached)) = cached {
                 // patch holes created during encoding
                 arguments
@@ -133,7 +139,7 @@ impl PgConnection {
                 (id, None)
             } else {
                 // Without a cache a named statement would never be closed.
-                let id = if persistent && self.inner.cache_statement.is_enabled() {
+                let id = if persistent && !other_types && self.inner.cache_statement.is_enabled() {
                     let id = self.inner.next_statement_id;
                     self.inner.next_statement_id = id.next();
                     parsed = Some(id);
@@ -419,3 +425,21 @@ impl<'c> Executor<'c> for &'c mut PgConnection {
         Ok(PgStatement { sql, metadata })
     }
 }
+
+/// Whether a statement whose parameters are `parameters` reads values of the
+/// `arguments` types: each argument whose type is known by OID has its
+/// parameter's. One declared by name is checked as its holes are patched.
+fn takes_types(parameters: &[PgTypeInfo], arguments: &[PgTypeInfo]) -> bool {
+    parameters
+        .iter()
+        .zip(arguments)
+        .all(|(parameter, argument)| {
+            argument
+                .oid()
+                .is_none_or(|oid| parameter.oid() == Some(oid))
+        })
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/connection_executor_tests.rs"]
+mod tests;

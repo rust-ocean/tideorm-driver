@@ -33,6 +33,10 @@ impl MySqlConnectOptions {
     /// - `PIPES_AS_CONCAT` makes `||` concatenate strings, not `OR` them.
     /// - `NO_ENGINE_SUBSTITUTION` makes a `CREATE TABLE` naming a missing
     ///   storage engine fail, not quietly use the default one.
+    /// - `group_concat_max_len` is raised to its 32-bit maximum: past it
+    ///   `GROUP_CONCAT`, and MariaDB's `JSON_ARRAYAGG`, cut their result
+    ///   short with only a warning, at 1 KiB on MySQL and 1 MiB on MariaDB
+    ///   by default. `max_allowed_packet` still bounds every result.
     /// - `time_zone` is what `TIMESTAMP` values are read and written in
     ///   (UTC by default).
     /// - `SET NAMES` makes the server send and expect text in the chosen
@@ -55,9 +59,12 @@ impl MySqlConnectOptions {
 
         // the server's own modes are kept, padded with commas so the removed
         // mode is matched as a whole name
-        let mut assignments = vec![format!(
-            "sql_mode=(SELECT TRIM(BOTH ',' FROM REPLACE(CONCAT(',', @@sql_mode, '{added},'), ',NO_BACKSLASH_ESCAPES,', ',')))"
-        )];
+        let mut assignments = vec![
+            format!(
+                "sql_mode=(SELECT TRIM(BOTH ',' FROM REPLACE(CONCAT(',', @@sql_mode, '{added},'), ',NO_BACKSLASH_ESCAPES,', ',')))"
+            ),
+            "group_concat_max_len=4294967295".to_owned(),
+        ];
         if let Some(timezone) = &self.timezone {
             let timezone = checked("time zone", timezone, |c| "_+-:/".contains(c))?;
             assignments.push(format!("time_zone='{timezone}'"));

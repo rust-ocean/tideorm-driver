@@ -23,7 +23,7 @@ impl Type<MySql> for DateTime<Utc> {
     }
 
     fn compatible(ty: &MySqlTypeInfo) -> bool {
-        matches!(ty.r#type, ColumnType::Datetime | ColumnType::Timestamp)
+        <NaiveDateTime as Type<MySql>>::compatible(ty)
     }
 }
 
@@ -230,6 +230,12 @@ impl Type<MySql> for NaiveDateTime {
     fn type_info() -> MySqlTypeInfo {
         MySqlTypeInfo::binary(ColumnType::Datetime)
     }
+
+    /// A `TIMESTAMP` reads as the `DATETIME` the session sees: both share one
+    /// wire format.
+    fn compatible(ty: &MySqlTypeInfo) -> bool {
+        matches!(ty.r#type, ColumnType::Datetime | ColumnType::Timestamp)
+    }
 }
 
 impl Encode<'_, MySql> for NaiveDateTime {
@@ -386,3 +392,7 @@ fn naive_time_encoded_len(time: &NaiveTime) -> u8 {
         12
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/types_chrono_tests.rs"]
+mod tests;

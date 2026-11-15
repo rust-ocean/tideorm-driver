@@ -15,8 +15,11 @@ use crate::{MySql, MySqlConnectOptions};
 mod auth;
 mod establish;
 mod executor;
+mod server;
 mod stream;
 mod tls;
+
+pub use server::MySqlServer;
 
 const MAX_PACKET_SIZE: u32 = 1024;
 
@@ -44,15 +47,20 @@ pub(crate) struct MySqlConnectionInner {
     // cache by query string to the statement id and metadata
     cache_statement: StatementCache<(u32, MySqlStatementMetadata)>,
 
-    // whether the server's handshake named MariaDB
-    mariadb: bool,
+    // the server its handshake named, or its session setup showed
+    pub(crate) server: MySqlServer,
 }
 
 impl MySqlConnection {
     /// Whether the server is MariaDB, as its handshake said: MariaDB speaks
     /// MySQL's protocol, but renders some SQL differently.
     pub fn is_mariadb(&self) -> bool {
-        self.inner.mariadb
+        self.inner.server == MySqlServer::MariaDb
+    }
+
+    /// The server this connection reached, as its handshake named it.
+    pub fn server(&self) -> MySqlServer {
+        self.inner.server
     }
 
     pub(crate) fn in_transaction(&self) -> bool {

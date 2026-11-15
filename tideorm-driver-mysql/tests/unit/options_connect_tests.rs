@@ -1,4 +1,4 @@
-use crate::MySqlConnectOptions;
+use crate::{MySqlConnectOptions, MySqlServer};
 
 /// The `sql_mode` and `group_concat_max_len` assignments every connection
 /// makes, adding `added` to the mode.
@@ -60,7 +60,11 @@ fn a_new_connection_runs_one_set_for_the_options_it_has() {
     ];
 
     for (name, options, expected) in cases {
-        assert_eq!(options.session_setup().unwrap(), expected, "{name}");
+        assert_eq!(
+            options.session_setup(MySqlServer::MySql).unwrap(),
+            expected,
+            "{name}"
+        );
     }
 }
 
@@ -77,8 +81,24 @@ fn a_value_written_into_the_set_must_be_a_name() {
         ("collation", options().collation("utf8mb4_bin COLLATE x")),
         ("quote", options().charset("utf8'")),
     ] {
-        let error = options.session_setup().unwrap_err().to_string();
+        let error = options
+            .session_setup(MySqlServer::MySql)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("not a valid name"), "{name}: {error}");
         assert!(!error.contains("DROP"), "{name}: the value is not echoed");
     }
+}
+
+#[test]
+fn vitess_is_not_asked_for_pipes_as_concat() {
+    let options = MySqlConnectOptions::new().timezone(None).set_names(false);
+    assert_eq!(
+        options.session_setup(MySqlServer::Vitess).unwrap(),
+        format!("SET {};", mode(",NO_ENGINE_SUBSTITUTION"))
+    );
+    assert_eq!(
+        options.session_setup(MySqlServer::TiDb).unwrap(),
+        format!("SET {};", mode(",PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION"))
+    );
 }

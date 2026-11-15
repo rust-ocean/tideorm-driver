@@ -11,8 +11,8 @@ use crate::protocol::Command;
 use crate::statement::{MySqlStatement, MySqlStatementMetadata};
 use crate::HashMap;
 use crate::{
-    MySql, MySqlArguments, MySqlColumn, MySqlConnection, MySqlQueryResult, MySqlRow, MySqlTypeInfo,
-    MySqlValueFormat,
+    MySql, MySqlArguments, MySqlColumn, MySqlConnection, MySqlQueryResult, MySqlRow, MySqlServer,
+    MySqlTypeInfo, MySqlValueFormat,
 };
 use driver_core::column::{ColumnOrigin, TableColumn};
 use driver_core::sql_str::SqlStr;
@@ -142,10 +142,14 @@ impl MySqlConnection {
                     );
                 }
 
+                let signed = (self.inner.server == MySqlServer::Vitess)
+                    .then(|| arguments.signed())
+                    .flatten();
+
                 // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_execute.html
                 self.inner.stream.write_command(Command::Execute {
                     statement: id,
-                    arguments: &arguments,
+                    arguments: signed.as_ref().unwrap_or(&arguments),
                 })?;
                 self.inner.stream.waiting.push_back(Waiting::Result);
                 if let Some(statement) = close {

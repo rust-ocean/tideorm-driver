@@ -75,6 +75,12 @@ impl DatabaseError for MySqlDatabaseError {
     }
 
     fn kind(&self) -> ErrorKind {
+        // Vitess reports its own parser's error as a generic 1105 (`HY000`)
+        if self.number() == error_codes::ER_UNKNOWN_ERROR
+            && self.message().starts_with("syntax error at position ")
+        {
+            return ErrorKind::SyntaxError;
+        }
         kind_of(self.number(), self.code())
     }
 }
@@ -224,6 +230,9 @@ pub(crate) mod error_codes {
     pub const ER_ACCESS_DENIED_NO_PASSWORD_ERROR: u16 = 1698;
     /// The database does not exist; its SQLSTATE, `42000`, is a syntax error's.
     pub const ER_BAD_DB_ERROR: u16 = 1049;
+    /// A generic error; Vitess also sends it for a statement its parser
+    /// refuses.
+    pub const ER_UNKNOWN_ERROR: u16 = 1105;
 
     pub(crate) mod mariadb {
         /// Error code emitted by MariaDB for constraint errors: <https://mariadb.com/kb/en/e4025/>

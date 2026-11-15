@@ -1,13 +1,13 @@
 use std::borrow::Cow;
 use std::env::var;
 use std::fmt::{self, Display, Write};
-use std::future::Future;
 use std::path::{Path, PathBuf};
 
 pub use ssl_mode::PgSslMode;
 
 use crate::connection::ConnectOptions;
 use crate::error::Error;
+use crate::executor::Executor;
 use crate::net::tls::CertificateInput;
 use crate::PgConnection;
 use driver_core::Url;
@@ -76,11 +76,15 @@ impl ConnectOptions for PgConnectOptions {
         Self::parse_from_url(url)
     }
 
-    fn connect(&self) -> impl Future<Output = Result<Self::Connection, Error>> + Send + '_
+    async fn connect(&self) -> Result<Self::Connection, Error>
     where
         Self::Connection: Sized,
     {
-        PgConnection::establish(self)
+        let mut connection = PgConnection::establish(self).await?;
+        if let Some(setup) = connection.server().session_setup() {
+            connection.execute(setup).await?;
+        }
+        Ok(connection)
     }
 }
 

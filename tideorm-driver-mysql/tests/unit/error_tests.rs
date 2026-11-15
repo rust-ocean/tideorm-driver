@@ -43,3 +43,19 @@ fn other_numbers_fall_back_to_their_sqlstate() {
         assert_eq!(kind_of(number, sqlstate), kind, "{number}");
     }
 }
+
+#[test]
+fn a_vitess_parser_error_is_a_syntax_error() {
+    let error = |message: &str| {
+        MySqlDatabaseError(crate::protocol::response::ErrPacket {
+            error_code: 1105,
+            sql_state: Some("HY000".into()),
+            error_message: message.into(),
+        })
+    };
+    assert_eq!(
+        error("syntax error at position 6 near 'SELEC'").kind(),
+        ErrorKind::SyntaxError
+    );
+    assert_eq!(error("VT13001: [BUG] something").kind(), ErrorKind::Other);
+}

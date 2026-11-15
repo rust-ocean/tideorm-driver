@@ -9,6 +9,7 @@ use futures_util::SinkExt;
 use log::Level;
 
 use crate::connection::tls::MaybeUpgradeTls;
+use crate::connection::PgServer;
 use crate::error::{DatabaseError, Error, ErrorKind};
 use crate::message::{
     BackendMessage, BackendMessageFormat, EncodeMessage, FrontendMessage, Notice, Notification,
@@ -39,6 +40,7 @@ pub struct PgStream {
     pub(crate) parameter_statuses: BTreeMap<String, String>,
 
     pub(crate) server_version_num: Option<u32>,
+    pub(crate) server: PgServer,
     pub(crate) transaction_state: TransactionState,
     /// Set by a deadlock, which aborts the whole transaction even inside a
     /// savepoint; cleared as the next transaction begins.
@@ -59,6 +61,7 @@ impl PgStream {
             notifications: None,
             parameter_statuses: BTreeMap::default(),
             server_version_num: None,
+            server: PgServer::Postgres,
             transaction_state: TransactionState::Idle,
             deadlocked: false,
         })
@@ -72,6 +75,7 @@ impl PgStream {
             notifications: None,
             parameter_statuses: BTreeMap::default(),
             server_version_num: None,
+            server: PgServer::Postgres,
             transaction_state: TransactionState::Idle,
             deadlocked: false,
         }
@@ -183,6 +187,7 @@ impl PgStream {
                     // The connection starts with `client_encoding` UTF8 and
                     // `DateStyle` ISO; a later `SET` of either is only recorded.
                     let ParameterStatus { name, value } = message.decode()?;
+                    self.server = self.server.reported(&name, &value);
 
                     match name.as_str() {
                         "server_version" => {

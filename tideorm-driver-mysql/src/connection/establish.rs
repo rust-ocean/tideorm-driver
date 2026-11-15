@@ -2,7 +2,7 @@ use bytes::buf::Buf;
 use bytes::Bytes;
 
 use crate::common::StatementCache;
-use crate::connection::{tls, MySqlConnectionInner, MySqlStream, MAX_PACKET_SIZE};
+use crate::connection::{tls, MySqlConnectionInner, MySqlServer, MySqlStream, MAX_PACKET_SIZE};
 use crate::error::Error;
 use crate::net::{Socket, WithSocket};
 use crate::protocol::connect::{
@@ -20,14 +20,14 @@ impl MySqlConnection {
             None => crate::net::connect_tcp(&options.host, options.port, do_handshake).await?,
         };
 
-        let (stream, mariadb) = handshake?;
+        let (stream, server) = handshake?;
 
         Ok(Self {
             inner: Box::new(MySqlConnectionInner {
                 stream,
                 transaction_depth: 0,
                 cache_statement: StatementCache::new(options.statement_cache_capacity),
-                mariadb,
+                server,
             }),
         })
     }
@@ -51,9 +51,9 @@ impl<'a> DoHandshake<'a> {
         Self { options }
     }
 
-    /// Connect and authenticate, returning the stream and whether the server
-    /// said it is MariaDB.
-    async fn do_handshake<S: Socket>(self, socket: S) -> Result<(MySqlStream, bool), Error> {
+    /// Connect and authenticate, returning the stream and the server the
+    /// handshake named.
+    async fn do_handshake<S: Socket>(self, socket: S) -> Result<(MySqlStream, MySqlServer), Error> {
         let DoHandshake { options } = self;
 
         let mut stream = MySqlStream::with_socket(options, socket);
@@ -62,10 +62,7 @@ impl<'a> DoHandshake<'a> {
         // https://mariadb.com/kb/en/connection/
 
         let handshake: Handshake = stream.recv_packet().await?.decode()?;
-        let mariadb = handshake
-            .server_version
-            .to_ascii_lowercase()
-            .contains("mariadb");
+        let server = MySqlServer::from_version(&handshake.server_version);
 
         let mut plugin = handshake.auth_plugin;
         let nonce = handshake.auth_plugin_data;
@@ -139,12 +136,12 @@ impl<'a> DoHandshake<'a> {
             }
         }
 
-        Ok((stream, mariadb))
+        Ok((stream, server))
     }
 }
 
 impl WithSocket for DoHandshake<'_> {
-    type Output = Result<(MySqlStream, bool), Error>;
+    type Output = Result<(MySqlStream, MySqlServer), Error>;
 
     async fn with_socket<S: Socket>(self, socket: S) -> Self::Output {
         self.do_handshake(socket).await

@@ -1,6 +1,6 @@
 [package]
 name = "tideorm-driver"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.94"
 description = "Database drivers for TideORM"
@@ -39,8 +39,8 @@ tls-rustls = ["tideorm-driver-core/_tls-rustls"]
 
 [dependencies]
 tideorm-driver-core = { version = "0.1.0", path = "tideorm-driver-core" }
-tideorm-driver-postgres = { version = "0.1.0", path = "tideorm-driver-postgres", optional = true }
-tideorm-driver-mysql = { version = "0.1.0", path = "tideorm-driver-mysql", optional = true }
+tideorm-driver-postgres = { version = "0.1.4", path = "tideorm-driver-postgres", optional = true }
+tideorm-driver-mysql = { version = "0.1.6", path = "tideorm-driver-mysql", optional = true }
 tideorm-driver-sqlite = { version = "0.1.0", path = "tideorm-driver-sqlite", optional = true }
 
 [lints.clippy]

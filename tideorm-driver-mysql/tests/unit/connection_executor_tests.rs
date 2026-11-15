@@ -19,7 +19,7 @@ fn connection(capacity: usize) -> (MySqlConnection, Arc<Mutex<Vec<u8>>>) {
             stream,
             transaction_depth: 0,
             cache_statement: StatementCache::new(capacity),
-            mariadb: false,
+            server: crate::MySqlServer::MySql,
         }),
     };
     (connection, input)

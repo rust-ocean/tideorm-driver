@@ -34,7 +34,7 @@ pub use advisory_lock::{PgAdvisoryLock, PgAdvisoryLockGuard, PgAdvisoryLockKey};
 pub use arguments::{PgArgumentBuffer, PgArguments};
 pub use bind_iter::PgBindIterExt;
 pub use column::PgColumn;
-pub use connection::PgConnection;
+pub use connection::{PgConnection, PgServer};
 pub use copy::{PgCopyIn, PgPoolCopyExt};
 pub use database::Postgres;
 pub use error::{PgDatabaseError, PgErrorPosition};

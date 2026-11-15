@@ -26,7 +26,7 @@ mod value;
 
 pub use arguments::MySqlArguments;
 pub use column::MySqlColumn;
-pub use connection::MySqlConnection;
+pub use connection::{MySqlConnection, MySqlServer};
 pub use database::MySql;
 pub use error::MySqlDatabaseError;
 pub use options::{MySqlConnectOptions, MySqlSslMode};

@@ -16,6 +16,7 @@ use crate::{PgConnectOptions, PgTypeInfo, Postgres};
 
 pub(crate) use driver_core::connection::*;
 
+pub use self::server::PgServer;
 pub use self::stream::PgStream;
 
 mod establish;
@@ -23,6 +24,7 @@ mod executor;
 mod prepare;
 mod resolve;
 mod sasl;
+mod server;
 mod stream;
 mod tls;
 
@@ -86,6 +88,12 @@ impl PgConnection {
     /// the version number of the server in `libpq` format
     pub fn server_version_num(&self) -> Option<u32> {
         self.inner.stream.server_version_num
+    }
+
+    /// The server this connection reached, as the parameters it reported
+    /// when the connection opened named it.
+    pub fn server(&self) -> PgServer {
+        self.inner.stream.server
     }
 
     // will return when the connection is ready for another query

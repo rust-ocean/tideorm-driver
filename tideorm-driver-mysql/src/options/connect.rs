@@ -1,7 +1,7 @@
 use crate::connection::ConnectOptions;
 use crate::error::Error;
 use crate::executor::Executor;
-use crate::{MySqlConnectOptions, MySqlConnection};
+use crate::{MySqlConnectOptions, MySqlConnection, MySqlDatabaseError, MySqlServer};
 use driver_core::sql_str::AssertSqlSafe;
 use driver_core::Url;
 
@@ -16,9 +16,29 @@ impl ConnectOptions for MySqlConnectOptions {
     where
         Self::Connection: Sized,
     {
-        let setup = self.session_setup()?;
+        // A bad option fails before connecting; only Vitess changes the setup.
+        self.session_setup(MySqlServer::MySql)?;
         let mut conn = MySqlConnection::establish(self).await?;
-        conn.execute(AssertSqlSafe(setup)).await?;
+        let setup = self.session_setup(conn.server())?;
+        match conn.execute(AssertSqlSafe(setup)).await {
+            // A Vitess told to report a plain MySQL version reads as MySQL
+            // until it refuses `PIPES_AS_CONCAT` as unsupported (1235), which
+            // MySQL never does for a mode it lists.
+            Err(Error::Database(error))
+                if conn.server() == MySqlServer::MySql
+                    && self.pipes_as_concat
+                    && error
+                        .try_downcast_ref::<MySqlDatabaseError>()
+                        .is_some_and(|error| error.number() == 1235) =>
+            {
+                conn.inner.server = MySqlServer::Vitess;
+                let setup = self.session_setup(MySqlServer::Vitess)?;
+                conn.execute(AssertSqlSafe(setup)).await?;
+            }
+            result => {
+                result?;
+            }
+        }
         Ok(conn)
     }
 }
@@ -31,6 +51,8 @@ impl MySqlConnectOptions {
     ///   as an escape, and a server whose global mode has it would read such
     ///   a literal differently, ending it early.
     /// - `PIPES_AS_CONCAT` makes `||` concatenate strings, not `OR` them.
+    ///   Vitess refuses the mode (its parser reads `||` as `OR`), so it is
+    ///   left out there.
     /// - `NO_ENGINE_SUBSTITUTION` makes a `CREATE TABLE` naming a missing
     ///   storage engine fail, not quietly use the default one.
     /// - `group_concat_max_len` is raised to its 32-bit maximum: past it
@@ -48,9 +70,12 @@ impl MySqlConnectOptions {
     ///
     /// <https://dev.mysql.com/doc/refman/8.4/en/sql-mode.html>
     /// <https://dev.mysql.com/doc/refman/8.4/en/set-names.html>
-    fn session_setup(&self) -> Result<String, Error> {
+    fn session_setup(&self, server: MySqlServer) -> Result<String, Error> {
         let added: String = [
-            (self.pipes_as_concat, ",PIPES_AS_CONCAT"),
+            (
+                self.pipes_as_concat && server != MySqlServer::Vitess,
+                ",PIPES_AS_CONCAT",
+            ),
             (self.no_engine_substitution, ",NO_ENGINE_SUBSTITUTION"),
         ]
         .into_iter()

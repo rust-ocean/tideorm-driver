@@ -15,7 +15,7 @@ name = "driver_mysql"
 path = "src/lib.rs"
 
 [dependencies]
-tideorm-driver-core = { version = "0.1.0", path = "../tideorm-driver-core" }
+tideorm-driver-core = { version = "0.1.4", path = "../tideorm-driver-core" }
 bitflags = { version = "2.4", default-features = false }
 byteorder = { version = "1.4.3", default-features = false, features = ["std"] }
 bytes = "1.2.0"

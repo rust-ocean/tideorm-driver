@@ -172,12 +172,13 @@ impl PgStream {
                 }
 
                 BackendMessageFormat::NotificationResponse => {
+                    // Without a listener (a `LISTEN` run as plain SQL) no one
+                    // takes it: it is dropped, not handed to a statement.
                     if let Some(buffer) = &mut self.notifications {
                         let notification: Notification = message.decode()?;
                         let _ = buffer.send(notification).await;
-
-                        continue;
                     }
+                    continue;
                 }
 
                 BackendMessageFormat::ParameterStatus => {

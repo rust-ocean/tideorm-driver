@@ -257,6 +257,11 @@ impl Connection for SqliteConnection {
         }
         self.worker.ping().await
     }
+
+    #[doc(hidden)]
+    fn is_flushed(&self) -> bool {
+        self.worker.is_idle()
+    }
 }
 
 /// Implements a C binding to a progress callback. The function returns `0` if the

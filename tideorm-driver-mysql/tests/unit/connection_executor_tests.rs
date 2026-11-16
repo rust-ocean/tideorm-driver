@@ -1,6 +1,7 @@
 use super::*;
 use crate::common::StatementCache;
 use crate::connection::MySqlConnectionInner;
+use crate::protocol::text::ColumnType;
 use crate::test_support::{fuzz, packet};
 use crate::MySqlConnectOptions;
 use driver_core::net::ScriptedSocket;
@@ -290,5 +291,82 @@ fn fetch_optional_reports_an_error_sent_after_its_first_row() {
             assert_eq!(result.is_err(), fails, "{:?}", result.as_ref().err());
             assert!(conn.inner.stream.waiting.is_empty());
         }
+    });
+}
+
+/// The definition of a result column `a` of type `ty`, with MariaDB's extended type info
+/// (empty), which the stream's capabilities ask for.
+fn column(ty: u8) -> Vec<u8> {
+    let mut payload = Vec::new();
+    for name in ["def", "", "", "", "a", "", ""] {
+        payload.push(u8::try_from(name.len()).unwrap());
+        payload.extend(name.as_bytes());
+    }
+    payload.push(0x0c);
+    payload.extend(63_u16.to_le_bytes());
+    payload.extend(20_u32.to_le_bytes());
+    payload.push(ty);
+    payload.extend(0_u16.to_le_bytes());
+    payload.extend([0, 0, 0]);
+    packet(&payload)
+}
+
+/// The rows a statement taking one value gives.
+async fn rows_of(conn: &mut MySqlConnection, sql: &'static str) -> Vec<MySqlRow> {
+    let stream = conn
+        .run(sql.into_sql_str(), Some(one_value()), true)
+        .await
+        .unwrap();
+    let mut stream = pin!(stream);
+    let mut rows = Vec::new();
+    while let Some(item) = stream.try_next().await.unwrap() {
+        rows.extend(item.right());
+    }
+    rows
+}
+
+/// A prepared statement's rows share the columns its prepare reported while the execute
+/// describes them the same way, and take the execute's when they differ.
+#[test]
+fn rows_share_the_prepared_columns_while_they_match() {
+    driver_core::rt::test_block_on(async {
+        let (mut conn, input) = connection(10);
+        let done = packet(&[0xfe, 0, 0, 2, 0, 0, 0]);
+        let mut prepare = vec![0];
+        prepare.extend(7_u32.to_le_bytes());
+        prepare.extend(1_u16.to_le_bytes()); // one column
+        prepare.extend(1_u16.to_le_bytes()); // one parameter
+        prepare.extend([0, 0, 0]);
+        let bigint = 0x08;
+        let bigint_row = packet(&[0, 0, 7, 0, 0, 0, 0, 0, 0, 0]);
+        *input.lock().unwrap() = [
+            packet(&prepare),
+            definition(),
+            column(bigint),
+            packet(&[1]),
+            column(bigint),
+            bigint_row,
+            done.clone(),
+        ]
+        .concat();
+        let rows = rows_of(&mut conn, "SELECT ? AS a").await;
+        let prepared = conn
+            .inner
+            .cache_statement
+            .get_mut("SELECT ? AS a")
+            .unwrap()
+            .1
+            .clone();
+        assert!(Arc::ptr_eq(&rows[0].columns, &prepared.columns));
+        assert!(Arc::ptr_eq(&rows[0].column_names, &prepared.column_names));
+
+        // the execute now says the column holds text
+        *input.lock().unwrap() =
+            [packet(&[1]), column(0xfd), packet(&[0, 0, 1, b'x']), done].concat();
+        let rows = rows_of(&mut conn, "SELECT ? AS a").await;
+        assert!(!Arc::ptr_eq(&rows[0].columns, &prepared.columns));
+        assert_eq!(rows[0].columns[0].type_info.r#type, ColumnType::VarString);
+        assert_eq!(rows[0].column_names.get("a"), Some(&0));
+        assert!(conn.inner.stream.waiting.is_empty());
     });
 }

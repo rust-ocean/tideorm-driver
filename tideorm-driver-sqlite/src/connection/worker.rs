@@ -26,7 +26,10 @@ use crate::connection::deserialize::{deserialize, serialize, SchemaName, SqliteO
 // Each SQLite connection has a dedicated thread.
 
 pub(crate) struct ConnectionWorker {
-    command_tx: flume::Sender<(Command, tracing::Span)>,
+    /// Each command goes with its number, counted before it is sent: a send
+    /// cancelled after the worker took the command still leaves `is_idle`
+    /// exact, since the worker publishes the number of the last one it handled.
+    command_tx: flume::Sender<(Command, tracing::Span, usize)>,
     sent_commands: usize,
     /// Mutex for locking access to the database.
     pub(crate) shared: Arc<WorkerSharedState>,
@@ -36,7 +39,8 @@ pub(crate) struct WorkerSharedState {
     transaction_depth: AtomicUsize,
     in_transaction: AtomicBool,
     cached_statements_size: AtomicUsize,
-    /// Commands the worker has handled, stored after the transaction state.
+    /// The number of the last command the worker handled, stored after the
+    /// transaction state.
     handled_commands: AtomicUsize,
     pub(crate) main_file: Option<PathBuf>,
     pub(crate) conn: Mutex<ConnectionState>,
@@ -176,10 +180,10 @@ impl ConnectionWorker {
                 loop {
                     shared.update_transaction_state(&conn.handle);
                     shared.handled_commands.store(handled, Ordering::Release);
-                    let Ok((cmd, span)) = command_rx.recv() else {
+                    let Ok((cmd, span, number)) = command_rx.recv() else {
                         break;
                     };
-                    handled = handled.wrapping_add(1);
+                    handled = number;
                     let _guard = span.enter();
                     match cmd {
                         Command::Prepare { query, tx } => {
@@ -238,11 +242,14 @@ impl ConnectionWorker {
                                 }
                             }
                             drop(iter);
+                            update_cached_statements_size(&conn, &shared.cached_statements_size);
+                            // Handled before the end of the result reaches the caller, so a
+                            // pool takes the connection back at once (the iterator's drop
+                            // published the transaction state).
+                            shared.handled_commands.store(handled, Ordering::Release);
                             if !rows.is_empty() {
                                 let _ = tx.send(rows);
                             }
-
-                            update_cached_statements_size(&conn, &shared.cached_statements_size);
                         }
                         Command::Begin { tx, statement } => {
                             if let Err(error) = shared.ensure_transaction_active() {
@@ -310,6 +317,8 @@ impl ConnectionWorker {
                                 Ok(())
                             };
                             shared.update_transaction_state(&conn.handle);
+                            // handled before the caller hears of it, as an execute is
+                            shared.handled_commands.store(handled, Ordering::Release);
                             let res_ok = res.is_ok();
 
                             if tx.blocking_send(res).is_err() && res_ok {
@@ -343,6 +352,7 @@ impl ConnectionWorker {
                             };
 
                             shared.update_transaction_state(&conn.handle);
+                            shared.handled_commands.store(handled, Ordering::Release);
                             let res_ok = res.is_ok();
 
                             if let Some(tx) = tx {
@@ -434,11 +444,15 @@ impl ConnectionWorker {
     }
 
     pub(crate) fn start_rollback(&mut self) -> Result<(), Error> {
-        self.command_tx
-            .send((Command::Rollback { tx: None }, Span::current()))
-            .map_err(|_| Error::WorkerCrashed)?;
         self.sent_commands = self.sent_commands.wrapping_add(1);
-        Ok(())
+        let command = (
+            Command::Rollback { tx: None },
+            Span::current(),
+            self.sent_commands,
+        );
+        self.command_tx
+            .send(command)
+            .map_err(|_| Error::WorkerCrashed)
     }
 
     /// Whether the worker has handled every command sent to it, so the transaction
@@ -448,12 +462,11 @@ impl ConnectionWorker {
     }
 
     async fn send(&mut self, command: Command) -> Result<(), Error> {
-        self.command_tx
-            .send_async((command, Span::current()))
-            .await
-            .map_err(|_| Error::WorkerCrashed)?;
         self.sent_commands = self.sent_commands.wrapping_add(1);
-        Ok(())
+        self.command_tx
+            .send_async((command, Span::current(), self.sent_commands))
+            .await
+            .map_err(|_| Error::WorkerCrashed)
     }
 
     pub(crate) async fn ping(&mut self) -> Result<(), Error> {
@@ -510,17 +523,16 @@ impl ConnectionWorker {
     }
 
     pub(crate) async fn unlock_db(&mut self) -> Result<MutexGuard<'_, ConnectionState>, Error> {
+        self.sent_commands = self.sent_commands.wrapping_add(1);
         let (guard, res) = futures_util::future::join(
             // we need to join the wait queue for the lock before we send the message
             self.shared.conn.lock(),
             self.command_tx
-                .send_async((Command::UnlockDb, Span::current())),
+                .send_async((Command::UnlockDb, Span::current(), self.sent_commands)),
         )
         .await;
 
         res.map_err(|_| Error::WorkerCrashed)?;
-        self.sent_commands = self.sent_commands.wrapping_add(1);
-
         Ok(guard)
     }
 
@@ -532,7 +544,11 @@ impl ConnectionWorker {
 
         let send_res = self
             .command_tx
-            .send((Command::Shutdown { tx }, Span::current()))
+            .send((
+                Command::Shutdown { tx },
+                Span::current(),
+                self.sent_commands,
+            ))
             .map_err(|_| Error::WorkerCrashed);
 
         async move {

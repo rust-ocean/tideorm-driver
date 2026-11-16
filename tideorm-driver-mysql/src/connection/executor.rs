@@ -51,20 +51,26 @@ impl MySqlConnection {
         // to-be-bound parameters; we will receive the output column definitions
         // once more on execute so we wait for that
 
-        let mut columns = Vec::new();
+        let mut columns = Arc::default();
 
         let column_names = if ok.columns > 0 {
-            recv_result_metadata(&mut self.inner.stream, ok.columns as usize, &mut columns).await?
+            recv_result_metadata(
+                &mut self.inner.stream,
+                ok.columns as usize,
+                &mut columns,
+                None,
+            )
+            .await?
         } else {
-            Default::default()
+            Arc::default()
         };
         self.inner.stream.waiting.pop_front();
 
         let id = ok.statement_id;
         let metadata = MySqlStatementMetadata {
             parameters: ok.params as usize,
-            columns: Arc::new(columns),
-            column_names: Arc::new(column_names),
+            columns,
+            column_names,
         };
 
         Ok((id, metadata))
@@ -114,6 +120,8 @@ impl MySqlConnection {
             // as long as a reference to a row is not held past one iteration, this enables us
             // to re-use this memory freely between result sets
             let mut columns = Arc::new(Vec::new());
+            // the columns a prepare reported, which the result's first set most often has
+            let mut prepared = None;
 
             // The reply is awaited from when the packet that asks for it is
             // written, and not before: a statement that fails before then
@@ -141,6 +149,8 @@ impl MySqlConnection {
                         )
                     );
                 }
+
+                prepared = Some(metadata);
 
                 let signed = (self.inner.server == MySqlServer::Vitess)
                     .then(|| arguments.signed())
@@ -203,9 +213,10 @@ impl MySqlConnection {
                 let num_columns = usize::try_from(num_columns)
                     .map_err(|_| err_protocol!("column count overflows usize: {num_columns}"))?;
 
-                // Always reload column names, even for prepared statements (the schema
+                // Always read the definitions, even for prepared statements (the schema
                 // may change between PREPARE and EXECUTE).
-                let column_names = Arc::new(recv_result_metadata(&mut self.inner.stream, num_columns, Arc::make_mut(&mut columns)).await?);
+                let prepared = prepared.take();
+                let column_names = recv_result_metadata(&mut self.inner.stream, num_columns, &mut columns, prepared.as_ref()).await?;
 
                 // finally, there will be none or many result-rows
                 loop {
@@ -371,34 +382,83 @@ fn recv_next_result_column(def: &ColumnDefinition, ordinal: usize) -> Result<MyS
     })
 }
 
+/// Reads a result set's column definitions into `columns`, returning each name's ordinal.
+/// While they match the columns `prepared` reported, those serve as they are: they differ
+/// only when the schema changed or a parameter's type sets a column's.
 async fn recv_result_metadata(
     stream: &mut MySqlStream,
     num_columns: usize,
-    columns: &mut Vec<MySqlColumn>,
-) -> Result<HashMap<UStr, usize>, Error> {
+    columns: &mut Arc<Vec<MySqlColumn>>,
+    prepared: Option<&MySqlStatementMetadata>,
+) -> Result<Arc<HashMap<UStr, usize>>, Error> {
     // the result-set metadata is primarily a listing of each output
     // column in the result-set
 
-    // The count is the server's: a forged one must not reserve memory before its definitions
-    // arrive. A prepared statement's columns are counted in a `u16`.
-    let capacity = num_columns.min(u16::MAX.into());
-    let mut column_names = HashMap::with_capacity(capacity);
-
-    columns.clear();
-    columns.reserve(capacity);
+    let mut prepared = prepared.filter(|prepared| prepared.columns.len() == num_columns);
+    let built = Arc::make_mut(columns);
+    built.clear();
+    if prepared.is_none() {
+        // The count is the server's: a forged one must not reserve memory before its
+        // definitions arrive. A prepared statement's columns are counted in a `u16`.
+        built.reserve(num_columns.min(u16::MAX.into()));
+    }
 
     for ordinal in 0..num_columns {
         let def: ColumnDefinition = stream.recv().await?;
 
-        let column = recv_next_result_column(&def, ordinal)?;
+        if let Some(known) = prepared {
+            if describes(&def, &known.columns[ordinal])? {
+                continue;
+            }
+            // built from here on, after the columns that matched
+            prepared = None;
+            built.reserve(num_columns);
+            built.extend_from_slice(&known.columns[..ordinal]);
+        }
 
-        column_names.insert(column.name.clone(), ordinal);
-        columns.push(column);
+        built.push(recv_next_result_column(&def, ordinal)?);
     }
 
     stream.maybe_recv_eof().await?;
 
-    Ok(column_names)
+    if let Some(prepared) = prepared {
+        *columns = Arc::clone(&prepared.columns);
+        return Ok(Arc::clone(&prepared.column_names));
+    }
+    let column_names = built
+        .iter()
+        .map(|column| (column.name.clone(), column.ordinal))
+        .collect();
+    Ok(Arc::new(column_names))
+}
+
+/// Whether `def` describes `column` exactly: the column it would build is that one.
+fn describes(def: &ColumnDefinition, column: &MySqlColumn) -> Result<bool, Error> {
+    let (name, alias, table) = (def.name()?, def.alias()?, def.table()?);
+    let origin = match &column.origin {
+        ColumnOrigin::Expression => table.is_empty(),
+        ColumnOrigin::Table(origin) => {
+            let schema = def.schema()?;
+            let qualified = if schema.is_empty() {
+                Some(&*origin.table)
+            } else {
+                origin
+                    .table
+                    .strip_prefix(schema)
+                    .and_then(|rest| rest.strip_prefix('.'))
+            };
+            !table.is_empty() && qualified == Some(table) && *origin.name == *name
+        }
+        ColumnOrigin::Unknown => false,
+    };
+    let ty = &column.type_info;
+    Ok(origin
+        && *column.name == *(if alias.is_empty() { name } else { alias })
+        && ty.r#type == def.r#type
+        && ty.flags == def.flags
+        && ty.collation == def.collation
+        && ty.max_size == Some(def.max_size)
+        && ty.extended == def.extended)
 }
 
 #[cfg(test)]

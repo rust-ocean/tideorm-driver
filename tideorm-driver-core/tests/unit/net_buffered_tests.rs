@@ -127,3 +127,70 @@ fn a_forged_length_reserves_little_ahead_of_the_bytes_that_arrive() {
     assert_eq!(socket.read_buf.read.len(), 16);
     assert!(socket.read_buf.available.capacity() <= 2 * MAX_READ_AHEAD);
 }
+
+/// A socket that hands out at most `chunk` bytes per read: into the spare capacity it is
+/// given, as Tokio's sockets do, or, `zeroing`, into the whole buffer `init_mut` gives, as
+/// async-io's do.
+struct Trickle {
+    input: Vec<u8>,
+    chunk: usize,
+    zeroing: bool,
+}
+
+impl Socket for Trickle {
+    fn try_read(&mut self, buf: &mut dyn ReadBuf) -> io::Result<usize> {
+        let room = if self.zeroing {
+            buf.init_mut().len()
+        } else {
+            buf.chunk_mut().len()
+        };
+        let n = self.chunk.min(self.input.len()).min(room);
+        if n == 0 {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        if self.zeroing {
+            buf.init_mut()[..n].copy_from_slice(&self.input[..n]);
+        } else {
+            buf.put_slice(&self.input[..n]);
+        }
+        self.input.drain(..n);
+        Ok(n)
+    }
+
+    fn try_write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn poll_read_ready(&mut self, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Pending
+    }
+
+    fn poll_write_ready(&mut self, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(&mut self, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+/// A message longer than the buffer is read where it arrives: growing the buffer moves the
+/// unread bytes once, and the bytes still to read lie right after them.
+#[test]
+fn a_message_longer_than_the_buffer_is_read_in_place() {
+    let message: Vec<u8> = (0..20_000_u32)
+        .map(|i| u8::try_from(i % 251).unwrap())
+        .collect();
+    for zeroing in [false, true] {
+        let mut socket = BufferedSocket::new(Trickle {
+            input: [&message[..], b"next"].concat(),
+            chunk: 3000,
+            zeroing,
+        });
+
+        assert_eq!(run(socket.read_buffered(message.len())).unwrap(), message);
+        let ReadBuffer { read, available } = &socket.read_buf;
+        assert_eq!(read.as_ptr_range().end, available.as_ptr(), "{zeroing}");
+        assert_eq!(run(socket.read_buffered(4)).unwrap(), &b"next"[..]);
+    }
+}

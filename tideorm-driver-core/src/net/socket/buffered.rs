@@ -284,8 +284,8 @@ impl WriteBuffer {
 
 impl ReadBuffer {
     async fn read(&mut self, len: usize, socket: &mut impl Socket) -> io::Result<()> {
-        // Because of how `BytesMut` works, we should only be shifting capacity back and forth
-        // between `read` and `available` unless we have to read an oversize message.
+        // `reserve` makes `available` the spare capacity right after `read`, so the bytes a
+        // read puts there join `read` without a copy.
         while self.read.len() < len {
             self.reserve(cmp::min(len - self.read.len(), MAX_READ_AHEAD));
 
@@ -309,9 +309,15 @@ impl ReadBuffer {
     }
 
     fn reserve(&mut self, amt: usize) {
-        if let Some(additional) = amt.checked_sub(self.available.capacity()) {
-            self.available.reserve(additional);
+        if self.available.capacity() >= amt {
+            return;
         }
+        // Grow `read` and take its spare capacity as `available`, so the bytes read next join
+        // `read` where they lie: only the unread part of a message moves, once. Dropping
+        // `available` first lets `read` grow in place when nothing else shares its buffer.
+        self.available = BytesMut::new();
+        self.read.reserve(amt);
+        self.available = self.read.split_off(self.read.len());
     }
 
     fn advance(&mut self, amt: usize) {

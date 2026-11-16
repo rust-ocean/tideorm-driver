@@ -172,6 +172,13 @@ pub trait Connection: Send {
     #[doc(hidden)]
     fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + Send + '_;
 
+    /// Whether [`flush`][Self::flush] would do nothing: no reply is pending and nothing waits
+    /// to be sent, so the transaction state is current.
+    #[doc(hidden)]
+    fn is_flushed(&self) -> bool {
+        false
+    }
+
     /// Establish a new database connection.
     ///
     /// A value of [`Options`][Self::Options] is parsed from the provided connection string. This parsing

@@ -217,6 +217,11 @@ impl Connection for PgConnection {
     fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + Send + '_ {
         self.wait_until_ready()
     }
+
+    #[doc(hidden)]
+    fn is_flushed(&self) -> bool {
+        self.inner.pending_ready_for_query_count == 0 && self.inner.stream.write_buffer().is_empty()
+    }
 }
 
 // Implement `AsMut<Self>` so that `PgConnection` can be wrapped in

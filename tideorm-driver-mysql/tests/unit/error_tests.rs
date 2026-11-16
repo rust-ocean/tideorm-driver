@@ -14,6 +14,8 @@ fn error_numbers_classify_what_their_sqlstate_does_not() {
         (3572, "HY000", ErrorKind::LockNotAvailable),
         // ER_LOCK_DEADLOCK's SQLSTATE is a serialization failure's.
         (1213, "40001", ErrorKind::Deadlock),
+        // TiDB's write conflict.
+        (9007, "HY000", ErrorKind::SerializationFailure),
         (3024, "HY000", ErrorKind::StatementTimeout),
         (1969, "70100", ErrorKind::StatementTimeout),
         (1142, "42000", ErrorKind::InsufficientPrivilege),

@@ -48,6 +48,43 @@ fn a_checkout_takes_the_connection_released_last() {
     });
 }
 
+/// A connection with nothing left to read or roll back is back in the pool as it drops, so a
+/// checkout right after reuses it instead of opening another; one left in a transaction is
+/// still rolled back before it goes back.
+#[test]
+fn a_settled_connection_is_back_as_it_drops() {
+    use driver_core::connection::Connection;
+    use driver_core::transaction::TransactionState;
+
+    driver_core::rt::test_block_on(async {
+        let pool = PoolOptions::<Sqlite>::new()
+            .max_connections(3)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for _ in 0..50 {
+            let mut conn = pool.acquire().await.unwrap();
+            conn.execute("SELECT 1").await.unwrap();
+            let mut tx = conn.begin().await.unwrap();
+            tx.execute("SELECT 1").await.unwrap();
+            tx.commit().await.unwrap();
+            drop(conn);
+            assert_eq!(pool.num_idle(), 1);
+        }
+        assert_eq!(pool.size(), 1);
+
+        let mut conn = pool.acquire().await.unwrap();
+        conn.execute("BEGIN").await.unwrap();
+        drop(conn);
+        wait_until("the connection is back", || pool.num_idle() == 1).await;
+        let conn = pool.acquire().await.unwrap();
+        assert_eq!(conn.transaction_state(), TransactionState::Idle);
+        drop(conn);
+        assert_eq!(pool.size(), 1);
+        pool.close().await;
+    });
+}
+
 #[test]
 fn an_idle_connection_reaches_its_idle_timeout() {
     driver_core::rt::test_block_on(async {

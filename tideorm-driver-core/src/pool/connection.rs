@@ -202,11 +202,29 @@ impl<DB: Database> Drop for PoolConnection<DB> {
             return;
         }
 
+        // One that `return_to_pool` would only release goes back now, so a checkout right
+        // after this drop finds it idle instead of opening another.
+        if let Some(live) = self.live.take_if(|live| settled(live, &self.pool)) {
+            live.float(self.pool.clone()).release();
+            return;
+        }
+
         // We still need to spawn a task to maintain `min_connections`.
         if self.live.is_some() || self.pool.options.min_connections > 0 {
             crate::rt::spawn(self.return_to_pool());
         }
     }
+}
+
+/// Whether `live` would go back with no I/O and no hook: an open pool, its lifetime left,
+/// nothing pending to read or send, and no transaction open.
+fn settled<DB: Database>(live: &Live<DB>, pool: &PoolInner<DB>) -> bool {
+    !pool.is_closed()
+        && pool.options.after_release.is_none()
+        && !is_beyond_max_lifetime(live, &pool.options)
+        && live.raw.is_flushed()
+        && !live.raw.is_in_transaction()
+        && live.raw.transaction_state() == TransactionState::Idle
 }
 
 impl<DB: Database> Live<DB> {

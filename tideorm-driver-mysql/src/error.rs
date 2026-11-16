@@ -124,6 +124,7 @@ fn kind_of(number: u16, sqlstate: Option<&str>) -> ErrorKind {
             ER_LOCK_WAIT_TIMEOUT | ER_LOCK_NOWAIT => ErrorKind::LockNotAvailable,
             ER_TRUNCATED_WRONG_VALUE_FOR_FIELD => ErrorKind::InvalidValue,
             ER_LOCK_DEADLOCK => ErrorKind::Deadlock,
+            tidb::ER_WRITE_CONFLICT => ErrorKind::SerializationFailure,
             ER_QUERY_INTERRUPTED | ER_QUERY_TIMEOUT | mariadb::ER_STATEMENT_TIMEOUT => {
                 ErrorKind::StatementTimeout
             }
@@ -233,6 +234,13 @@ pub(crate) mod error_codes {
     /// A generic error; Vitess also sends it for a statement its parser
     /// refuses.
     pub const ER_UNKNOWN_ERROR: u16 = 1105;
+
+    pub(crate) mod tidb {
+        /// An optimistic transaction met another one's write and was rolled
+        /// back; its SQLSTATE is the catch-all `HY000`. No MySQL or MariaDB
+        /// error has this number.
+        pub const ER_WRITE_CONFLICT: u16 = 9007;
+    }
 
     pub(crate) mod mariadb {
         /// Error code emitted by MariaDB for constraint errors: <https://mariadb.com/kb/en/e4025/>

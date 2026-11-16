@@ -108,6 +108,11 @@ impl Connection for MySqlConnection {
         self.inner.stream.wait_until_ready()
     }
 
+    #[doc(hidden)]
+    fn is_flushed(&self) -> bool {
+        self.inner.stream.waiting.is_empty() && self.inner.stream.write_buffer().is_empty()
+    }
+
     fn cached_statements_size(&self) -> usize {
         self.inner.cache_statement.len()
     }

@@ -236,10 +236,15 @@ fn kind_of(code: &str) -> ErrorKind {
         // query_canceled, which a statement_timeout raises
         "57014" => ErrorKind::StatementTimeout,
         "53300" => ErrorKind::TooManyConnections,
-        // Class 08, connection exception, and admin_shutdown, crash_shutdown,
-        // cannot_connect_now.
+        // protocol_violation, which a Bind with the wrong number of values
+        // raises and the connection outlives: no retry gets past it.
+        "08P01" => ErrorKind::Other,
+        // Class 08, connection exception; admin_shutdown, crash_shutdown,
+        // cannot_connect_now; and the server's idle_session_timeout,
+        // idle_in_transaction_session_timeout and transaction_timeout, each
+        // of which ends the connection.
         connection if connection.starts_with("08") => ErrorKind::ConnectionClosed,
-        "57P01" | "57P02" | "57P03" => ErrorKind::ConnectionClosed,
+        "57P01" | "57P02" | "57P03" | "57P05" | "25P03" | "25P04" => ErrorKind::ConnectionClosed,
         _ => ErrorKind::Other,
     }
 }

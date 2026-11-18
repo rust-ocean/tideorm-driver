@@ -40,6 +40,22 @@ pub mod chrono {
 #[doc(no_inline)]
 pub use rust_decimal::Decimal;
 
+/// `text`, a decimal number as a database prints it, as a [`Decimal`], or an error when its
+/// value does not fit one: parsing alone rounds away the digits past the 28 `Decimal` holds.
+#[doc(hidden)]
+pub fn decimal_from_text(text: &str) -> Result<Decimal, crate::error::BoxDynError> {
+    let value: Decimal = text.parse()?;
+    // 28 digits always fit; past them, only the zeros ending a fraction may be dropped
+    if text.bytes().filter(u8::is_ascii_digit).count() > 28 {
+        let significant = match text.contains('.') {
+            true => text.trim_end_matches('0').trim_end_matches('.'),
+            false => text,
+        };
+        Decimal::from_str_exact(significant)?;
+    }
+    Ok(value)
+}
+
 pub use json::{Json, JsonRawValue, JsonValue};
 pub use text::Text;
 
@@ -138,3 +154,7 @@ where
         <T as Type<DB>>::compatible(ty)
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/types_tests.rs"]
+mod tests;

@@ -2,7 +2,7 @@ use std::mem;
 
 use chrono::{NaiveDate, TimeDelta};
 
-use super::{out_of_range, postgres_epoch, representable};
+use super::{out_of_range, parse_text, postgres_epoch, representable};
 use crate::decode::Decode;
 use crate::encode::{Encode, IsNull};
 use crate::error::BoxDynError;
@@ -52,7 +52,7 @@ impl<'r> Decode<'r, Postgres> for NaiveDate {
                     .ok_or_else(|| out_of_range("DATE", days.into()))?
             }
 
-            PgValueFormat::Text => NaiveDate::parse_from_str(value.as_str()?, "%Y-%m-%d")?,
+            PgValueFormat::Text => parse_text(value.as_str()?)?.0.date(),
         })
     }
 }

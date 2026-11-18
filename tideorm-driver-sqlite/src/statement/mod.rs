@@ -49,14 +49,6 @@ impl Statement for SqliteStatement {
 
 impl ColumnIndex<SqliteStatement> for &'_ str {
     fn index(&self, statement: &SqliteStatement) -> Result<usize, Error> {
-        column_index(&statement.column_names, self)
+        driver_core::column::column_by_name(&statement.column_names, self)
     }
-}
-
-/// The position of the column called `name`, for statements and the rows they return.
-pub(crate) fn column_index(names: &HashMap<UStr, usize>, name: &str) -> Result<usize, Error> {
-    names
-        .get(name)
-        .copied()
-        .ok_or_else(|| Error::ColumnNotFound(name.into()))
 }

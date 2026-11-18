@@ -3,8 +3,9 @@ use crate::connection::{ConnectionState, Statements};
 use crate::error::Error;
 use crate::SqliteConnectOptions;
 use libsqlite3_sys::{
-    sqlite3_busy_timeout, sqlite3_context, sqlite3_create_function_v2, sqlite3_result_error,
-    sqlite3_set_authorizer, sqlite3_value, sqlite3_value_bytes, sqlite3_value_text, SQLITE_ATTACH,
+    sqlite3_busy_timeout, sqlite3_context, sqlite3_create_function_v2, sqlite3_db_config,
+    sqlite3_result_error, sqlite3_set_authorizer, sqlite3_value, sqlite3_value_bytes,
+    sqlite3_value_text, SQLITE_ATTACH, SQLITE_DBCONFIG_DQS_DDL, SQLITE_DBCONFIG_DQS_DML,
     SQLITE_DIRECTONLY, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_FULLMUTEX, SQLITE_OPEN_MEMORY,
     SQLITE_OPEN_NOMUTEX, SQLITE_OPEN_PRIVATECACHE, SQLITE_OPEN_READONLY, SQLITE_OPEN_READWRITE,
     SQLITE_OPEN_SHAREDCACHE, SQLITE_OPEN_URI, SQLITE_UTF8,
@@ -88,12 +89,19 @@ impl EstablishParams {
             query_params.insert("vfs", vfs);
         }
 
-        if !query_params.is_empty() {
+        // SQLite reads parameters only from a URI, and shares an in-memory database's cache only
+        // between connections that name it by one
+        if !filename.starts_with("file:")
+            && (!query_params.is_empty() || (options.shared_cache && options.names_memory()))
+        {
             filename = format!(
-                "file:{}?",
+                "file:{}",
                 percent_encoding::percent_encode(filename.as_bytes(), NON_ALPHANUMERIC),
             );
+        }
 
+        if !query_params.is_empty() {
+            filename.push(if filename.contains('?') { '&' } else { '?' });
             // Suffix serializer automatically handles `&` separators for us.
             let filename_len = filename.len();
             filename = url::form_urlencoded::Serializer::for_suffix(filename, filename_len)
@@ -165,6 +173,16 @@ impl EstablishParams {
             .expect("Given busy timeout value is too big.");
 
         handle.call_with_result(|db| unsafe { sqlite3_busy_timeout(db, ms) })?;
+
+        // A double-quoted name no column has is an error, as on every other backend, never the
+        // text it spells (https://sqlite.org/quirks.html#dblquote): a misspelt column would
+        // filter by, index or select a constant. Schemas already stored still parse with it.
+        for setting in [SQLITE_DBCONFIG_DQS_DML, SQLITE_DBCONFIG_DQS_DDL] {
+            // SAFETY: we have exclusive access, and this matches the expected signature
+            handle.call_with_result(|db| unsafe {
+                sqlite3_db_config(db, setting, 0 as c_int, std::ptr::null_mut::<c_int>())
+            })?;
+        }
 
         let attached = Arc::clone(&self.attached);
         // SAFETY: the flag outlives the handle: the connection state holds it

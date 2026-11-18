@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::{fuzz, packet};
+use crate::test_support::{allocations, fuzz, packet};
 use driver_core::net::ScriptedSocket;
 
 #[test]
@@ -75,6 +75,25 @@ fn a_read_cancelled_between_parts_leaves_the_stream_unusable() {
         assert!(stream.recv_packet().now_or_never().is_none());
         let error = stream.wait_until_ready().await.unwrap_err();
         assert!(error.to_string().contains("between the parts"), "{error}");
+    });
+}
+
+/// Every row and column definition is a packet: reading one builds no error it does not return.
+#[test]
+fn reading_a_packet_allocates_nothing_of_its_own() {
+    driver_core::rt::test_block_on(async {
+        let input: Vec<u8> = (0..1000)
+            .flat_map(|_| packet(&[0x00, 0, 0, 2, 0, 0, 0]))
+            .collect();
+        let mut stream =
+            MySqlStream::with_socket(&MySqlConnectOptions::new(), ScriptedSocket::new(input));
+        stream.recv_packet().await.unwrap();
+        let before = allocations();
+        for _ in 1..1000 {
+            stream.recv_packet().await.unwrap();
+        }
+        let made = allocations() - before;
+        assert!(made < 100, "{made} allocations for 999 packets");
     });
 }
 

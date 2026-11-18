@@ -76,6 +76,45 @@ fn representable(value: PgValueRef<'_>) -> Result<PgValueRef<'_>, PgUnrepresenta
     }
 }
 
+/// A `DATE`, `TIMESTAMP`, `TIMESTAMPTZ` or dated `TIMETZ` as PostgreSQL prints it in the ISO
+/// style the connection sets: a year of four digits or more, the time and the offset (`+05`,
+/// `-04:56:02`) if any, then ` BC` for a year before 1. The moment as written, and its offset in
+/// seconds.
+pub(super) fn parse_text(text: &str) -> Result<(NaiveDateTime, Option<i32>), BoxDynError> {
+    let (text, bc) = match text.strip_suffix(" BC") {
+        Some(text) => (text, true),
+        None => (text, false),
+    };
+    let (date, rest) = text.split_once(' ').unwrap_or((text, ""));
+    let mut fields = date.splitn(3, '-').map(str::parse::<u32>);
+    let mut field = || fields.next().unwrap_or(Ok(0));
+    let (year, month, day) = (i32::try_from(field()?)?, field()?, field()?);
+    // 1 BC is the year 0
+    let year = if bc { 1 - year } else { year };
+    let date = NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| format!("invalid date {date:?}"))?;
+
+    let (time, offset) = match rest.find(['+', '-']) {
+        Some(at) => rest.split_at(at),
+        None => (rest, ""),
+    };
+    let time = match time {
+        "" => NaiveTime::MIN,
+        time => NaiveTime::parse_from_str(time, "%H:%M:%S%.f")?,
+    };
+    let offset = match offset.split_at_checked(1) {
+        Some((sign, offset)) => {
+            let mut seconds = 0;
+            for (part, unit) in offset.split(':').zip([3600, 60, 1]) {
+                seconds += part.parse::<i32>()? * unit;
+            }
+            Some(if sign == "-" { -seconds } else { seconds })
+        }
+        None => None,
+    };
+    Ok((date.and_time(time), offset))
+}
+
 /// The error for a binary `DATE` or timestamp past chrono's range.
 fn out_of_range(type_name: &str, value: i64) -> BoxDynError {
     format!("{type_name} value {value} is outside chrono's range").into()

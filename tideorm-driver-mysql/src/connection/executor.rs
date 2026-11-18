@@ -14,7 +14,7 @@ use crate::{
     MySql, MySqlArguments, MySqlColumn, MySqlConnection, MySqlQueryResult, MySqlRow, MySqlServer,
     MySqlTypeInfo, MySqlValueFormat,
 };
-use driver_core::column::{ColumnOrigin, TableColumn};
+use driver_core::column::{insert_column_name, ColumnOrigin, TableColumn};
 use driver_core::sql_str::SqlStr;
 use either::Either;
 use futures_core::Stream;
@@ -111,7 +111,7 @@ impl MySqlConnection {
         persistent: bool,
     ) -> Result<impl Stream<Item = Result<Either<MySqlQueryResult, MySqlRow>, Error>> + 'e, Error>
     {
-        self.inner.stream.wait_until_ready().await?;
+        self.inner.stream.drain_abandoned().await?;
 
         Ok(try_stream! {
         let sql = sql.as_str();
@@ -326,7 +326,7 @@ impl<'c> Executor<'c> for &'c mut MySqlConnection {
     where
         'c: 'e,
     {
-        self.inner.stream.wait_until_ready().await?;
+        self.inner.stream.drain_abandoned().await?;
 
         let metadata = if self.inner.cache_statement.is_enabled() {
             self.get_or_prepare_statement(sql.as_str()).await?.1
@@ -425,10 +425,10 @@ async fn recv_result_metadata(
         *columns = Arc::clone(&prepared.columns);
         return Ok(Arc::clone(&prepared.column_names));
     }
-    let column_names = built
-        .iter()
-        .map(|column| (column.name.clone(), column.ordinal))
-        .collect();
+    let mut column_names = HashMap::with_capacity(built.len());
+    for column in built.iter() {
+        insert_column_name(&mut column_names, column.name.clone(), column.ordinal);
+    }
     Ok(Arc::new(column_names))
 }
 

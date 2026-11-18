@@ -122,6 +122,19 @@ impl PgConnection {
         Ok(())
     }
 
+    /// [`wait_until_ready`][Self::wait_until_ready] before a new statement. The replies still
+    /// pending are those of statements no one awaits (a stream dropped part-way, a cancelled
+    /// call, a queued rollback), so an error the server sent in one is that statement's, not
+    /// the new one's; the `ReadyForQuery` after it still records the transaction's state.
+    pub(crate) async fn drain_abandoned(&mut self) -> Result<(), Error> {
+        loop {
+            match self.wait_until_ready().await {
+                Err(Error::Database(_)) => {}
+                done => return done,
+            }
+        }
+    }
+
     pub(crate) async fn recv_ready_for_query(&mut self) -> Result<(), Error> {
         let _: ReadyForQuery = self.inner.stream.recv_expect().await?;
 
@@ -191,7 +204,7 @@ impl Connection for PgConnection {
     async fn ping(&mut self) -> Result<(), Error> {
         // The simplest call-and-response that's possible.
         self.write_sync();
-        self.wait_until_ready().await
+        self.drain_abandoned().await
     }
 
     fn cached_statements_size(&self) -> usize {
@@ -201,7 +214,7 @@ impl Connection for PgConnection {
     async fn clear_cached_statements(&mut self) -> Result<(), Error> {
         self.inner.cache_type_oid.clear();
 
-        self.wait_until_ready().await?;
+        self.drain_abandoned().await?;
 
         while let Some((id, _)) = self.inner.cache_statement.remove_lru() {
             self.inner.closing.push(id);
@@ -215,7 +228,7 @@ impl Connection for PgConnection {
 
     #[doc(hidden)]
     fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + Send + '_ {
-        self.wait_until_ready()
+        self.drain_abandoned()
     }
 
     #[doc(hidden)]

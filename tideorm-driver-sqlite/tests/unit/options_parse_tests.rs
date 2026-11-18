@@ -82,6 +82,9 @@ fn transient_and_private_databases_are_told_apart() -> Result<(), Error> {
         ("sqlite://", true, true),
         ("sqlite://a.db", false, false),
         ("sqlite://a.db?cache=private", false, false),
+        // SQLite's URI for an in-memory database
+        ("sqlite:file::memory:", true, true),
+        ("sqlite:file::memory:?cache=shared", true, false),
     ] {
         let options: SqliteConnectOptions = url.parse()?;
         assert_eq!(options.is_transient(), transient, "{url}");

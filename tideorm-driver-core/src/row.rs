@@ -100,6 +100,7 @@ pub trait Row: Unpin + Send + Sync + 'static {
     /// # Errors
     ///
     ///  * [`ColumnNotFound`] if the column by the given name was not found.
+    ///  * [`ColumnDecode`] if more than one column has the given name.
     ///  * [`ColumnIndexOutOfBounds`] if the `usize` index was greater than the number of columns in the row.
     ///  * [`ColumnDecode`] if the value could not be decoded into the requested type.
     ///
@@ -140,6 +141,7 @@ pub trait Row: Unpin + Send + Sync + 'static {
     /// # Errors
     ///
     ///  * [`ColumnNotFound`] if the column by the given name was not found.
+    ///  * [`ColumnDecode`] if more than one column has the given name.
     ///  * [`ColumnIndexOutOfBounds`] if the `usize` index was greater than the number of columns in the row.
     ///  * [`ColumnDecode`] if the value could not be decoded into the requested type.
     ///
@@ -166,6 +168,7 @@ pub trait Row: Unpin + Send + Sync + 'static {
     /// # Errors
     ///
     ///  * [`ColumnNotFound`] if the column by the given name was not found.
+    ///  * [`ColumnDecode`] if more than one column has the given name.
     ///  * [`ColumnIndexOutOfBounds`] if the `usize` index was greater than the number of columns in the row.
     ///
     /// [`ColumnNotFound`]: Error::ColumnNotFound

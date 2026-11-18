@@ -83,8 +83,10 @@ See `default_host()` in the same source file as this method for the current beha
 
 # Note: SSL
 ## Root Certs
-If `sslrootcert` is not set and the `tls-rustls` feature is enabled, TLS roots are
-populated using the [`webpki-roots`] crate.
+A root certificate given with `sslrootcert` is the only one trusted. If `sslrootcert` is
+not set, `verify-full` trusts the public roots of the [`webpki-roots`] crate, and
+`verify-ca` refuses to connect, as libpq does: any public authority signs certificates for
+any domain, so a chain check without the host name would accept them all.
 
 ## Environment Variables
 Unlike with `libpq`, the following environment variables may be _either_

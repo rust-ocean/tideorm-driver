@@ -1,3 +1,4 @@
+use driver_core::types::decimal_from_text;
 use rust_decimal::Decimal;
 
 use crate::decode::Decode;
@@ -6,8 +7,6 @@ use crate::error::BoxDynError;
 use crate::types::numeric::{PgNumeric, PgNumericSign};
 use crate::types::Type;
 use crate::{PgArgumentBuffer, PgHasArrayType, PgTypeInfo, PgValueFormat, PgValueRef, Postgres};
-
-use rust_decimal::MathematicalOps;
 
 impl Type<Postgres> for Decimal {
     fn type_info() -> PgTypeInfo {
@@ -33,7 +32,7 @@ impl TryFrom<&'_ PgNumeric> for Decimal {
     type Error = BoxDynError;
 
     fn try_from(numeric: &'_ PgNumeric) -> Result<Self, BoxDynError> {
-        let (digits, sign, mut weight, scale) = match *numeric {
+        let (digits, sign, weight, scale) = match *numeric {
             PgNumeric::Number {
                 ref digits,
                 sign,
@@ -46,6 +45,11 @@ impl TryFrom<&'_ PgNumeric> for Decimal {
             }
         };
 
+        // zero groups ending the digits add nothing
+        let digits = &digits[..digits
+            .iter()
+            .rposition(|&d| d != 0)
+            .map_or(0, |last| last + 1)];
         if digits.is_empty() {
             // Postgres returns an empty digit array for 0
             return Ok(Decimal::ZERO);
@@ -54,31 +58,43 @@ impl TryFrom<&'_ PgNumeric> for Decimal {
         let scale = u32::try_from(scale)
             .map_err(|_| format!("invalid scale value for Pg NUMERIC: {scale}"))?;
 
-        let mut value = Decimal::ZERO;
-
-        // Sum over `digits`, multiply each by its weight and add it to `value`.
+        // The digits as one exact integer: summing `Decimal`s would round once the value
+        // needs more than the 28 digits one holds.
+        const UNREPRESENTABLE: &str = "value not representable as rust_decimal::Decimal";
+        let mut mantissa = 0_i128;
         for &digit in digits {
-            let mul = Decimal::from(10_000i16)
-                .checked_powi(weight as i64)
-                .ok_or("value not representable as rust_decimal::Decimal")?;
-
-            let part = Decimal::from(digit)
-                .checked_mul(mul)
-                .ok_or("value not representable as rust_decimal::Decimal")?;
-
-            value = value
-                .checked_add(part)
-                .ok_or("value not representable as rust_decimal::Decimal")?;
-
-            weight = weight.checked_sub(1).ok_or("weight underflowed")?;
+            mantissa = mantissa
+                .checked_mul(10_000)
+                .and_then(|m| m.checked_add(digit.into()))
+                .ok_or(UNREPRESENTABLE)?;
         }
+        // the power of ten of the last digit
+        let digit_count = i64::try_from(digits.len()).map_err(|_| UNREPRESENTABLE)?;
+        let mut exponent = 4 * (i64::from(weight) + 1 - digit_count);
+        while exponent < 0 && mantissa % 10 == 0 {
+            mantissa /= 10;
+            exponent += 1;
+        }
+        if exponent > 0 {
+            mantissa = u32::try_from(exponent)
+                .ok()
+                .and_then(|e| 10_i128.checked_pow(e))
+                .and_then(|power| mantissa.checked_mul(power))
+                .ok_or(UNREPRESENTABLE)?;
+        }
+        let fraction = u32::try_from(-exponent.min(0)).map_err(|_| UNREPRESENTABLE)?;
+        let mut value =
+            Decimal::try_from_i128_with_scale(mantissa, fraction).map_err(|_| UNREPRESENTABLE)?;
 
         match sign {
             PgNumericSign::Positive => value.set_sign_positive(true),
             PgNumericSign::Negative => value.set_sign_negative(true),
         }
 
-        value.rescale(scale);
+        // the zeros of the declared scale; a smaller one would round
+        if scale > value.scale() {
+            value.rescale(scale);
+        }
 
         Ok(value)
     }
@@ -184,7 +200,7 @@ impl Decode<'_, Postgres> for Decimal {
     fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
         match value.format() {
             PgValueFormat::Binary => PgNumeric::decode(value.as_bytes()?)?.try_into(),
-            PgValueFormat::Text => Ok(value.as_str()?.parse::<Decimal>()?),
+            PgValueFormat::Text => decimal_from_text(value.as_str()?),
         }
     }
 }

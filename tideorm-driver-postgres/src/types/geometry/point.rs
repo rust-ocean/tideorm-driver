@@ -85,8 +85,8 @@ impl FromStr for PgPoint {
 
 impl PgPoint {
     fn from_bytes(mut bytes: &[u8]) -> Result<PgPoint, BoxDynError> {
-        let x = bytes.get_f64();
-        let y = bytes.get_f64();
+        let x = bytes.try_get_f64()?;
+        let y = bytes.try_get_f64()?;
         Ok(PgPoint { x, y })
     }
 

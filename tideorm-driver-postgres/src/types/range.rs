@@ -262,7 +262,7 @@ where
                 let mut start = Bound::Unbounded;
                 let mut end = Bound::Unbounded;
 
-                let flags = RangeFlags::from_bits_truncate(buf.get_u8());
+                let flags = RangeFlags::from_bits_truncate(buf.try_get_u8()?);
 
                 if flags.contains(RangeFlags::EMPTY) {
                     return Ok(PgRange { start, end });
@@ -301,13 +301,17 @@ where
 
                 let s = value.as_str()?;
 
+                // trim the wrapping braces/brackets
+                let inner = s
+                    .get(1..s.len().saturating_sub(1))
+                    .ok_or_else(|| format!("{s:?} is not a range"))?;
+
                 // remember the bounds
                 let sb = s.as_bytes();
                 let lower = sb[0] as char;
                 let upper = sb[sb.len() - 1] as char;
 
-                // trim the wrapping braces/brackets
-                let s = &s[1..(s.len() - 1)];
+                let s = inner;
 
                 let mut chars = s.chars();
 

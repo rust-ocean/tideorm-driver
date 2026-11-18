@@ -164,23 +164,19 @@ pub(super) fn decode_datetime_from_int(value: i64) -> Option<DateTime<FixedOffse
 }
 
 pub(super) fn decode_datetime_from_float(value: f64) -> Option<DateTime<FixedOffset>> {
-    let epoch_in_julian_days = 2_440_587.5;
-    let seconds_in_day = 86400.0;
-    let timestamp = (value - epoch_in_julian_days) * seconds_in_day;
-
-    if !timestamp.is_finite() {
+    // the Unix epoch, 2440587.5 Julian days, in milliseconds
+    const UNIX_EPOCH_MS: i64 = 210_866_760_000_000;
+    // to the millisecond, as SQLite reads one: a double holds no finer part of a Julian day
+    let ms = (value * 86_400_000.0 + 0.5).floor();
+    if !ms.is_finite() {
         return None;
     }
-
-    // We don't really have a choice but to do lossy casts for this conversion
-    // We checked above if the value is infinite or NaN which could otherwise cause problems
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    {
-        let seconds = timestamp.trunc() as i64;
-        let nanos = (timestamp.fract() * 1E9).abs() as u32;
-
-        Utc.fix().timestamp_opt(seconds, nanos).single()
-    }
+    // saturates past `i64`'s range, which no date reaches
+    #[allow(clippy::cast_possible_truncation)]
+    let ms = ms as i64;
+    Utc.fix()
+        .timestamp_millis_opt(ms.checked_sub(UNIX_EPOCH_MS)?)
+        .single()
 }
 
 impl<'r> Decode<'r, Sqlite> for NaiveDateTime {
@@ -217,3 +213,7 @@ pub(super) fn decode_time_from_text(value: &str) -> Option<NaiveTime> {
         .iter()
         .find_map(|format| NaiveTime::parse_from_str(value, format).ok())
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/types_chrono_tests.rs"]
+mod tests;

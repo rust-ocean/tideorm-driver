@@ -133,3 +133,19 @@ fn values_read_back_as_they_were_bound() {
         assert_eq!(row.get::<Text<i32>, _>(9).0, 42);
     });
 }
+
+/// A `REAL` past the range of `f32` is refused, not read as infinity; an infinite one stays one.
+#[test]
+fn a_real_past_the_range_of_f32_is_refused() {
+    driver_core::rt::test_block_on(async {
+        let mut conn = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        let row = query::<Sqlite>("SELECT 3.5e38, -1e308, 9e999, 0.1")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert!(row.try_get::<f32, _>(0).is_err());
+        assert!(row.try_get::<f32, _>(1).is_err());
+        assert_eq!(row.get::<f32, _>(2), f32::INFINITY);
+        assert_eq!(row.get::<f32, _>(3), 0.1);
+    });
+}

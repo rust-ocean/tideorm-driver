@@ -5,7 +5,6 @@ use crate::{
     types::Type,
     {PgArgumentBuffer, PgHasArrayType, PgTypeInfo, PgValueFormat, PgValueRef, Postgres},
 };
-use byteorder::{BigEndian, ByteOrder};
 use std::{
     io,
     ops::{Add, AddAssign, Sub, SubAssign},
@@ -136,7 +135,7 @@ impl Decode<'_, Postgres> for PgMoney {
     fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
         match value.format() {
             PgValueFormat::Binary => {
-                let cents = BigEndian::read_i64(value.as_bytes()?);
+                let cents = i64::from_be_bytes(value.as_bytes()?.try_into()?);
 
                 Ok(PgMoney(cents))
             }

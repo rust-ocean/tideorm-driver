@@ -1,6 +1,6 @@
 [package]
 name = "tideorm-driver-core"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.94"
 description = "Connection, pool and type foundations of TideORM's database drivers"

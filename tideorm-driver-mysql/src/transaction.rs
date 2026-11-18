@@ -20,7 +20,7 @@ impl TransactionManager for MySqlTransactionManager {
         let statement = begin_statement(depth, statement)?;
         // Read what earlier statements left pending first, so the reply read
         // below is this statement's own.
-        conn.inner.stream.wait_until_ready().await?;
+        conn.inner.stream.drain_abandoned().await?;
         if depth == 0 {
             conn.inner.stream.deadlocked = false;
         }
@@ -65,7 +65,7 @@ impl TransactionManager for MySqlTransactionManager {
         }
         // No transaction of ours is open, but the server may still hold one
         // (a raw `BEGIN`); its state is current once the queued replies are read.
-        conn.inner.stream.wait_until_ready().await?;
+        conn.inner.stream.drain_abandoned().await?;
         if conn.in_transaction() {
             conn.execute(rollback_ansi_transaction_sql(1)).await?;
         }

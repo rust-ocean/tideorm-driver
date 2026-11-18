@@ -21,6 +21,8 @@ fn error_numbers_classify_what_their_sqlstate_does_not() {
         (1142, "42000", ErrorKind::InsufficientPrivilege),
         (1053, "08S01", ErrorKind::ConnectionClosed),
         (1927, "70100", ErrorKind::ConnectionClosed),
+        // MySQL 8.0.24+ says so as `wait_timeout` ends the connection.
+        (4031, "HY000", ErrorKind::ConnectionClosed),
         (1366, "HY000", ErrorKind::InvalidValue),
         (1045, "28000", ErrorKind::AuthenticationFailed),
         (1698, "28000", ErrorKind::AuthenticationFailed),

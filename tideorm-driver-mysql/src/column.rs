@@ -1,6 +1,4 @@
-use crate::error::Error;
 use crate::ext::ustr::UStr;
-use crate::HashMap;
 use crate::{MySql, MySqlTypeInfo};
 pub(crate) use driver_core::column::*;
 
@@ -31,13 +29,4 @@ impl Column for MySqlColumn {
     fn origin(&self) -> ColumnOrigin {
         self.origin.clone()
     }
-}
-
-/// The ordinal of the column called `name`, looked up the same way for a row
-/// and for a statement.
-pub(crate) fn ordinal_by_name(names: &HashMap<UStr, usize>, name: &str) -> Result<usize, Error> {
-    names
-        .get(name)
-        .copied()
-        .ok_or_else(|| Error::ColumnNotFound(name.into()))
 }

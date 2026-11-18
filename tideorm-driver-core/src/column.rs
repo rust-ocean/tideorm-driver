@@ -3,6 +3,8 @@
 
 use crate::database::Database;
 use crate::error::Error;
+use crate::ext::ustr::UStr;
+use crate::HashMap;
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -81,7 +83,8 @@ impl ColumnOrigin {
 /// [`Row::try_get`]: crate::row::Row::try_get
 pub trait ColumnIndex<T: ?Sized>: Debug {
     /// The position this key names in `container`, or [`Error::ColumnIndexOutOfBounds`]
-    /// or [`Error::ColumnNotFound`] when there is none.
+    /// or [`Error::ColumnNotFound`] when there is none, and [`Error::ColumnDecode`] for a
+    /// name more than one column has.
     fn index(&self, container: &T) -> Result<usize, Error>;
 }
 
@@ -89,6 +92,35 @@ impl<T: ?Sized, I: ColumnIndex<T> + ?Sized> ColumnIndex<T> for &'_ I {
     #[inline]
     fn index(&self, row: &T) -> Result<usize, Error> {
         (**self).index(row)
+    }
+}
+
+/// What [`insert_column_name`] records for a name more than one column has.
+const AMBIGUOUS: usize = usize::MAX;
+
+/// Records that result column `ordinal` is called `name`. A name two columns share is
+/// recorded as ambiguous, which [`column_by_name`] refuses rather than pick one: a join's
+/// two `id`s would otherwise read as whichever came last.
+pub fn insert_column_name(names: &mut HashMap<UStr, usize>, name: UStr, ordinal: usize) {
+    names
+        .entry(name)
+        .and_modify(|known| *known = AMBIGUOUS)
+        .or_insert(ordinal);
+}
+
+/// The position of the result column called `name`: [`Error::ColumnNotFound`] when no
+/// column is, and [`Error::ColumnDecode`] when more than one is.
+pub fn column_by_name(names: &HashMap<UStr, usize>, name: &str) -> Result<usize, Error> {
+    match names.get(name) {
+        Some(&AMBIGUOUS) => Err(Error::ColumnDecode {
+            index: name.into(),
+            source: format!(
+                "more than one result column is named `{name}`; give each an alias or read them by position"
+            )
+            .into(),
+        }),
+        Some(&ordinal) => Ok(ordinal),
+        None => Err(Error::ColumnNotFound(name.into())),
     }
 }
 
@@ -129,3 +161,7 @@ macro_rules! impl_column_index_for_statement {
         }
     };
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/column_tests.rs"]
+mod tests;

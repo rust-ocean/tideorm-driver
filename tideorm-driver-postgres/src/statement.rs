@@ -43,11 +43,6 @@ impl Statement for PgStatement {
 
 impl ColumnIndex<PgStatement> for &'_ str {
     fn index(&self, statement: &PgStatement) -> Result<usize, Error> {
-        statement
-            .metadata
-            .column_names
-            .get(*self)
-            .ok_or_else(|| Error::ColumnNotFound((*self).into()))
-            .copied()
+        driver_core::column::column_by_name(&statement.metadata.column_names, self)
     }
 }

@@ -118,16 +118,7 @@ where
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(DummyTlsVerifier { provider }))
     } else {
-        let mut cert_store =
-            RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-        if let Some(ca) = tls_config.root_cert_path {
-            let certs = certs_from_pem(ca.data().await?)
-                .map_err(|_| Error::Tls(format!("Invalid certificate {ca}").into()))?;
-            for cert in certs {
-                cert_store.add(cert).map_err(|err| Error::Tls(err.into()))?;
-            }
-        }
+        let cert_store = trusted_roots(&tls_config).await?;
 
         if tls_config.accept_invalid_hostnames {
             let verifier = WebPkiServerVerifier::builder(Arc::new(cert_store))
@@ -157,10 +148,53 @@ where
         close_notify_sent: false,
     };
 
-    // Performs the TLS handshake or bails
-    socket.complete_io().await?;
+    // Performs the TLS handshake or bails. rustls reports a refusal (an untrusted certificate, a
+    // failed negotiation) inside an I/O error; it is a TLS failure, which no retry gets past,
+    // not a broken connection.
+    if let Err(err) = socket.complete_io().await {
+        if err.get_ref().is_some_and(|inner| inner.is::<TlsError>()) {
+            return Err(Error::Tls(
+                err.into_inner().expect("an error wrapping a TLS error"),
+            ));
+        }
+        return Err(Error::Io(err));
+    }
 
     Ok(socket)
+}
+
+/// The certificate authorities a verified connection trusts: the root
+/// certificates the options name, and only those, as libpq's `sslrootcert`
+/// and MySQL's `ssl-ca` are; without any, the public web roots.
+///
+/// Checking the certificate authority without the host name needs named
+/// roots: any public authority signs certificates for any domain, so with
+/// the web roots such a check would accept every publicly issued
+/// certificate. libpq and MySQL's clients refuse it too.
+async fn trusted_roots(tls_config: &TlsConfig<'_>) -> Result<RootCertStore, Error> {
+    let Some(ca) = tls_config.root_cert_path else {
+        if tls_config.accept_invalid_hostnames {
+            return Err(Error::Tls(
+                "checking the server's certificate authority without its host name needs the \
+                 root certificate to trust (`sslrootcert` on PostgreSQL, `ssl-ca` on MySQL); \
+                 without one, verify the host name too (`verify-full`, `VERIFY_IDENTITY`)"
+                    .into(),
+            ));
+        }
+        return Ok(RootCertStore::from_iter(
+            webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
+        ));
+    };
+    let certs = certs_from_pem(ca.data().await?)
+        .map_err(|_| Error::Tls(format!("Invalid certificate {ca}").into()))?;
+    if certs.is_empty() {
+        return Err(Error::Tls(format!("no certificate in {ca}").into()));
+    }
+    let mut cert_store = RootCertStore::empty();
+    for cert in certs {
+        cert_store.add(cert).map_err(|err| Error::Tls(err.into()))?;
+    }
+    Ok(cert_store)
 }
 
 fn certs_from_pem(pem: Vec<u8>) -> Result<Vec<CertificateDer<'static>>, Error> {
@@ -279,3 +313,7 @@ impl ServerCertVerifier for NoHostnameTlsVerifier {
         self.verifier.supported_verify_schemes()
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/net_tls_tests.rs"]
+mod tests;

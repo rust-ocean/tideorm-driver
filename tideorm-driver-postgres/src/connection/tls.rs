@@ -42,10 +42,7 @@ async fn maybe_upgrade<S: Socket>(
 
     // `verify-ca` checks the certificate chain, and `verify-full` the host name as well.
     let config = TlsConfig {
-        accept_invalid_certs: !matches!(
-            options.ssl_mode,
-            PgSslMode::VerifyCa | PgSslMode::VerifyFull
-        ),
+        accept_invalid_certs: !verifies_certificate(options),
         accept_invalid_hostnames: !matches!(options.ssl_mode, PgSslMode::VerifyFull),
         hostname: &options.host,
         root_cert_path: options.ssl_root_cert.as_ref(),
@@ -54,6 +51,17 @@ async fn maybe_upgrade<S: Socket>(
     };
 
     tls::handshake(socket, config, SocketIntoBox).await
+}
+
+/// Whether the server's certificate chain is checked: in `verify-ca` and
+/// `verify-full`, and in `require` when a root certificate is given, which
+/// libpq then checks as `verify-ca` does.
+fn verifies_certificate(options: &PgConnectOptions) -> bool {
+    match options.ssl_mode {
+        PgSslMode::VerifyCa | PgSslMode::VerifyFull => true,
+        PgSslMode::Require => options.ssl_root_cert.is_some(),
+        PgSslMode::Disable | PgSslMode::Allow | PgSslMode::Prefer => false,
+    }
 }
 
 /// Sends an `SSLRequest`, in place of the start-up message, and reads the server's one-byte
@@ -74,3 +82,7 @@ async fn request_tls(socket: &mut impl Socket) -> Result<bool, Error> {
         )),
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/connection_tls_tests.rs"]
+mod tests;

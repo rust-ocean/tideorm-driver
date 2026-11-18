@@ -33,7 +33,7 @@ impl<Time, Offset> PgHasArrayType for PgTimeTz<Time, Offset> {
 
 mod chrono {
     use super::*;
-    use ::chrono::{DateTime, FixedOffset, NaiveTime};
+    use ::chrono::{FixedOffset, NaiveTime};
 
     impl Type<Postgres> for PgTimeTz<NaiveTime, FixedOffset> {
         fn type_info() -> PgTypeInfo {
@@ -83,29 +83,13 @@ mod chrono {
     }
 
     fn try_parse_timetz(s: &str) -> Result<PgTimeTz<NaiveTime, FixedOffset>, BoxDynError> {
-        let mut tmp = String::with_capacity(11 + s.len());
-        tmp.push_str("2001-07-08 ");
-        tmp.push_str(s);
-
-        let mut err = None;
-
-        for fmt in &["%Y-%m-%d %H:%M:%S%.f%#z", "%Y-%m-%d %H:%M:%S%.f"] {
-            match DateTime::parse_from_str(&tmp, fmt) {
-                Ok(dt) => {
-                    let time = dt.time();
-                    let offset = *dt.offset();
-
-                    return Ok(PgTimeTz { time, offset });
-                }
-
-                Err(error) => {
-                    err = Some(error);
-                }
-            }
-        }
-
-        Err(err
-            .expect("BUG: loop should have set `err` to `Some()` before exiting")
-            .into())
+        // the timestamp parser reads the offset, its seconds too, on a date of no meaning
+        let (moment, offset) = crate::types::chrono::parse_text(&format!("2001-07-08 {s}"))?;
+        let offset = FixedOffset::east_opt(offset.unwrap_or(0))
+            .ok_or_else(|| format!("server returned out-of-range offset for `TIMETZ`: {s}"))?;
+        Ok(PgTimeTz {
+            time: moment.time(),
+            offset,
+        })
     }
 }

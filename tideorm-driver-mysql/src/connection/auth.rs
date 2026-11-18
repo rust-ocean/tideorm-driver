@@ -16,6 +16,14 @@ impl AuthPlugin {
         nonce: &Chain<Bytes, Bytes>,
     ) -> Result<Vec<u8>, Error> {
         match self {
+            // An empty password gets an empty answer, as MySQL's and MariaDB's clients give: a
+            // scramble of it would not match an account without a password.
+            AuthPlugin::CachingSha2Password | AuthPlugin::MySqlNativePassword
+                if password.is_empty() =>
+            {
+                Ok(Vec::new())
+            }
+
             // https://mariadb.com/kb/en/caching_sha2_password-authentication-plugin/
             AuthPlugin::CachingSha2Password => Ok(scramble_sha256(password, nonce)),
 
@@ -130,8 +138,8 @@ async fn encrypt_rsa<'s>(
 ) -> Result<Vec<u8>, Error> {
     // https://mariadb.com/kb/en/caching_sha2_password-authentication-plugin/
 
-    if stream.is_tls {
-        // If in a TLS stream, send the password directly in clear text
+    // In a TLS stream, or when there is nothing to hide, send the password in clear text
+    if stream.is_tls || password.is_empty() {
         return Ok(to_asciz(password));
     }
 

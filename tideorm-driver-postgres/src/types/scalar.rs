@@ -5,7 +5,6 @@
 
 use std::str::FromStr;
 
-use byteorder::{BigEndian, ByteOrder};
 use uuid::Uuid;
 
 use crate::decode::Decode;
@@ -50,14 +49,16 @@ pg_type! {
     Uuid => UUID, UUID_ARRAY;
 }
 
-/// A number in either format: big-endian bytes, read by `read`, or decimal text.
-fn decode_number<T>(value: PgValueRef<'_>, read: fn(&[u8]) -> T) -> Result<T, BoxDynError>
+/// A number in either format: its `N` big-endian bytes, read by `read`, or decimal text.
+fn decode_number<T, const N: usize>(
+    value: PgValueRef<'_>,
+    read: fn([u8; N]) -> T,
+) -> Result<T, BoxDynError>
 where
-    T: FromStr,
-    BoxDynError: From<T::Err>,
+    T: FromStr<Err: std::error::Error + Send + Sync + 'static>,
 {
     Ok(match value.format() {
-        PgValueFormat::Binary => read(value.as_bytes()?),
+        PgValueFormat::Binary => read(value.as_bytes()?.try_into()?),
         PgValueFormat::Text => value.as_str()?.parse()?,
     })
 }
@@ -72,7 +73,7 @@ impl Encode<'_, Postgres> for bool {
 impl Decode<'_, Postgres> for bool {
     fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
         match value.format() {
-            PgValueFormat::Binary => Ok(value.as_bytes()?[0] != 0),
+            PgValueFormat::Binary => Ok(<[u8; 1]>::try_from(value.as_bytes()?)? != [0]),
             PgValueFormat::Text => match value.as_str()? {
                 "t" => Ok(true),
                 "f" => Ok(false),
@@ -91,7 +92,7 @@ impl Encode<'_, Postgres> for f32 {
 
 impl Decode<'_, Postgres> for f32 {
     fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
-        decode_number(value, BigEndian::read_f32)
+        decode_number(value, f32::from_be_bytes)
     }
 }
 
@@ -104,7 +105,7 @@ impl Encode<'_, Postgres> for f64 {
 
 impl Decode<'_, Postgres> for f64 {
     fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
-        decode_number(value, BigEndian::read_f64)
+        decode_number(value, f64::from_be_bytes)
     }
 }
 
@@ -117,7 +118,7 @@ impl Encode<'_, Postgres> for Oid {
 
 impl Decode<'_, Postgres> for Oid {
     fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
-        decode_number(value, BigEndian::read_u32).map(Oid)
+        decode_number(value, u32::from_be_bytes).map(Oid)
     }
 }
 

@@ -29,6 +29,12 @@ impl Row for PgRow {
         I: ColumnIndex<Self>,
     {
         let index = index.index(self)?;
+        // A statement described before its table lost a column has more columns than its rows
+        // have values.
+        let len = self.data.values.len();
+        if index >= len {
+            return Err(Error::ColumnIndexOutOfBounds { len, index });
+        }
 
         Ok(PgValueRef {
             format: self.format,
@@ -41,11 +47,7 @@ impl Row for PgRow {
 
 impl ColumnIndex<PgRow> for &'_ str {
     fn index(&self, row: &PgRow) -> Result<usize, Error> {
-        row.metadata
-            .column_names
-            .get(*self)
-            .copied()
-            .ok_or_else(|| Error::ColumnNotFound((*self).into()))
+        driver_core::column::column_by_name(&row.metadata.column_names, self)
     }
 }
 
@@ -54,3 +56,7 @@ impl std::fmt::Debug for PgRow {
         debug_row(self, f)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/row_tests.rs"]
+mod tests;

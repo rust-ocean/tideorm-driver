@@ -9,7 +9,7 @@ use driver_core::ext::ustr::UStr;
 use driver_core::row::{debug_row, Row};
 use driver_core::HashMap;
 
-use crate::statement::{column_index, StatementHandle};
+use crate::statement::StatementHandle;
 use crate::{Sqlite, SqliteColumn, SqliteValue, SqliteValueRef};
 
 /// One row of a SQLite result: its own copy of every value, and the statement's column
@@ -75,7 +75,7 @@ impl Row for SqliteRow {
 
 impl ColumnIndex<SqliteRow> for &'_ str {
     fn index(&self, row: &SqliteRow) -> Result<usize, Error> {
-        column_index(&row.column_names, self)
+        driver_core::column::column_by_name(&row.column_names, self)
     }
 }
 

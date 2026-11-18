@@ -209,6 +209,14 @@ impl PgConnection {
         }
     }
 
+    /// Drops `sql`'s cached statement, so its next run parses it again; it is closed with the
+    /// next execution's messages.
+    pub(super) fn forget_statement(&mut self, sql: &str) {
+        if let Some((id, _)) = self.inner.cache_statement.remove(sql) {
+            self.inner.closing.push(id);
+        }
+    }
+
     /// Close the statements evicted from the cache that no execution has
     /// closed yet, in a round trip of their own.
     pub(super) async fn close_evicted(&mut self) -> Result<(), Error> {

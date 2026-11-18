@@ -1,5 +1,5 @@
 use super::MySqlColumn;
-use crate::column::{ordinal_by_name, ColumnIndex};
+use crate::column::{column_by_name, ColumnIndex};
 use crate::error::Error;
 use crate::ext::ustr::UStr;
 use crate::HashMap;
@@ -49,6 +49,6 @@ impl Statement for MySqlStatement {
 
 impl ColumnIndex<MySqlStatement> for &'_ str {
     fn index(&self, statement: &MySqlStatement) -> Result<usize, Error> {
-        ordinal_by_name(&statement.metadata.column_names, self)
+        column_by_name(&statement.metadata.column_names, self)
     }
 }

@@ -91,3 +91,13 @@ fn addresses_take_text_columns_and_decimals_take_decimal_columns() {
         );
     }
 }
+
+/// A `DECIMAL` with more digits than `Decimal` holds is refused, not rounded.
+#[test]
+fn a_decimal_too_precise_for_decimal_is_refused() {
+    assert!(Decimal::decode(text("0.123456789012345678901234567890")).is_err());
+    assert_eq!(
+        Decimal::decode(text("2.000000000000000000000000000000")).unwrap(),
+        Decimal::TWO
+    );
+}

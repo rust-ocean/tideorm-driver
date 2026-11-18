@@ -95,10 +95,10 @@ impl FromStr for PgBox {
 
 impl PgBox {
     fn from_bytes(mut bytes: &[u8]) -> Result<PgBox, BoxDynError> {
-        let upper_right_x = bytes.get_f64();
-        let upper_right_y = bytes.get_f64();
-        let lower_left_x = bytes.get_f64();
-        let lower_left_y = bytes.get_f64();
+        let upper_right_x = bytes.try_get_f64()?;
+        let upper_right_y = bytes.try_get_f64()?;
+        let lower_left_x = bytes.try_get_f64()?;
+        let lower_left_y = bytes.try_get_f64()?;
 
         Ok(PgBox {
             upper_right_x,

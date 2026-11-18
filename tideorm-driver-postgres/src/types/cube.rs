@@ -254,15 +254,15 @@ fn parse_zero_volume(content: &str) -> Result<PgCube, Error> {
 
 fn parse_one_dimensional_interval(point_vecs: Vec<&str>) -> Result<PgCube, Error> {
     let x = parse_float_from_str(
-        &remove_parentheses(point_vecs.first().ok_or(Error::Decode(
-            format!("Could not decode cube interval x: {:?}", point_vecs).into(),
-        ))?),
+        &remove_parentheses(point_vecs.first().ok_or_else(|| {
+            Error::Decode(format!("Could not decode cube interval x: {:?}", point_vecs).into())
+        })?),
         "Failed to parse X in one-dimensional interval",
     )?;
     let y = parse_float_from_str(
-        &remove_parentheses(point_vecs.get(1).ok_or(Error::Decode(
-            format!("Could not decode cube interval y: {:?}", point_vecs).into(),
-        ))?),
+        &remove_parentheses(point_vecs.get(1).ok_or_else(|| {
+            Error::Decode(format!("Could not decode cube interval y: {:?}", point_vecs).into())
+        })?),
         "Failed to parse Y in one-dimensional interval",
     )?;
     Ok(PgCube::OneDimensionInterval(x, y))

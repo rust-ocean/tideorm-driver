@@ -114,14 +114,22 @@ pub(crate) fn fuzz(seed: u64, iterations: usize, valid: &[Vec<u8>], mut check: i
 
 thread_local! {
     static LARGEST_ALLOCATION: Cell<usize> = const { Cell::new(0) };
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
-/// The test binary's allocator: the system's, recording each thread's largest request.
+/// How many allocations this thread has made.
+pub(crate) fn allocations() -> usize {
+    ALLOCATIONS.with(Cell::get)
+}
+
+/// The test binary's allocator: the system's, recording each thread's largest request and
+/// counting its allocations.
 struct Recording;
 
 fn record(size: usize) {
     // `try_with`: threads also allocate while their locals are torn down
     let _ = LARGEST_ALLOCATION.try_with(|largest| largest.set(largest.get().max(size)));
+    let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
 }
 
 unsafe impl GlobalAlloc for Recording {

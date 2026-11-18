@@ -289,9 +289,11 @@ impl<'r> Decode<'r, MySql> for NaiveDateTime {
 }
 
 fn encode_date(date: &NaiveDate, buf: &mut Vec<u8>) -> Result<(), BoxDynError> {
-    // MySQL supports years 1000 - 9999
+    // MySQL keeps years 0 - 9999; MariaDB stores a later one as the zero date
     let year = u16::try_from(date.year())
-        .map_err(|_| format!("NaiveDateTime out of range for Mysql: {date}"))?;
+        .ok()
+        .filter(|year| *year <= 9999)
+        .ok_or_else(|| format!("NaiveDateTime out of range for Mysql: {date}"))?;
 
     buf.extend_from_slice(&year.to_le_bytes());
 

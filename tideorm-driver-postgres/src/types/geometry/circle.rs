@@ -4,7 +4,6 @@ use crate::error::BoxDynError;
 use crate::types::Type;
 use crate::{PgArgumentBuffer, PgHasArrayType, PgTypeInfo, PgValueFormat, PgValueRef, Postgres};
 use driver_core::bytes::Buf;
-use driver_core::Error;
 use std::str::FromStr;
 
 const ERROR: &str = "error decoding CIRCLE";
@@ -100,10 +99,10 @@ impl FromStr for PgCircle {
 }
 
 impl PgCircle {
-    fn from_bytes(mut bytes: &[u8]) -> Result<PgCircle, Error> {
-        let x = bytes.get_f64();
-        let y = bytes.get_f64();
-        let r = bytes.get_f64();
+    fn from_bytes(mut bytes: &[u8]) -> Result<PgCircle, BoxDynError> {
+        let x = bytes.try_get_f64()?;
+        let y = bytes.try_get_f64()?;
+        let r = bytes.try_get_f64()?;
         Ok(PgCircle { x, y, radius: r })
     }
 

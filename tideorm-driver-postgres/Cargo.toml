@@ -1,6 +1,6 @@
 [package]
 name = "tideorm-driver-postgres"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.94"
 description = "PostgreSQL driver for TideORM"
@@ -15,7 +15,7 @@ name = "driver_postgres"
 path = "src/lib.rs"
 
 [dependencies]
-tideorm-driver-core = { version = "0.1.4", path = "../tideorm-driver-core" }
+tideorm-driver-core = { version = "0.2.0", path = "../tideorm-driver-core" }
 atoi = "2.0"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 bitflags = { version = "2.4", default-features = false }
@@ -32,7 +32,7 @@ log = "0.4.18"
 md-5 = { version = "0.11.0", default-features = false }
 memchr = { version = "2.5.0", default-features = false }
 rand = { version = "0.10.1", default-features = false, features = ["thread_rng"] }
-rust_decimal = { version = "1.36.0", default-features = false, features = ["std", "maths"] }
+rust_decimal = { version = "1.36.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.142", features = ["raw_value"] }
 sha2 = { version = "0.11.0", default-features = false }

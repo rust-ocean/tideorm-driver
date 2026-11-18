@@ -27,7 +27,14 @@ fn sqlstates_classify_the_error() {
         ("57014", ErrorKind::StatementTimeout),
         ("53300", ErrorKind::TooManyConnections),
         ("08006", ErrorKind::ConnectionClosed),
+        // A Bind with the wrong number of values; the connection goes on.
+        ("08P01", ErrorKind::Other),
         ("57P01", ErrorKind::ConnectionClosed),
+        // The server ends the connection on its own idle, idle-in-transaction
+        // and transaction timeouts.
+        ("57P05", ErrorKind::ConnectionClosed),
+        ("25P03", ErrorKind::ConnectionClosed),
+        ("25P04", ErrorKind::ConnectionClosed),
         ("XX000", ErrorKind::Other),
     ] {
         assert_eq!(kind_of(sqlstate), kind, "{sqlstate}");

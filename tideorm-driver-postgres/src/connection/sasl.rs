@@ -13,7 +13,6 @@ use rand::RngExt;
 
 const GS2_HEADER: &str = "n,,";
 const CHANNEL_ATTR: &str = "c";
-const USERNAME_ATTR: &str = "n";
 const CLIENT_PROOF_ATTR: &str = "p";
 const NONCE_ATTR: &str = "r";
 
@@ -57,22 +56,13 @@ pub(crate) async fn authenticate(
     let mut channel_binding = format!("{CHANNEL_ATTR}=");
     BASE64_STANDARD.encode_string(GS2_HEADER, &mut channel_binding);
 
-    // "n=" saslname ;; Usernames are prepared using SASLprep.
-    let username = format!("{}={}", USERNAME_ATTR, options.username);
-    let username = match saslprep(&username) {
-        Ok(v) => v,
-        Err(error) => {
-            return Err(Error::Configuration(
-                format!("Failed to saslprep username: {:?}", error).into(),
-            ))
-        }
-    };
-
     // nonce = "r=" c-nonce [s-nonce] ;; Second part provided by server.
     let nonce = gen_nonce();
 
     // client-first-message-bare = [reserved-mext ","] username "," nonce ["," extensions]
-    let client_first_message_bare = format!("{username},{NONCE_ATTR}={nonce}");
+    // The user name is left empty, as libpq leaves it: the server takes the start-up message's
+    // and ignores this one, which SCRAM would need escaped (`,` as `=2C`).
+    let client_first_message_bare = format!("n=,{NONCE_ATTR}={nonce}");
 
     let client_first_message = format!("{GS2_HEADER}{client_first_message_bare}");
 
@@ -101,16 +91,9 @@ pub(crate) async fn authenticate(
         ));
     }
 
-    // Normalize(password):
+    // Normalize(password): a password SASLprep refuses is used as it is, as the server stored it.
     let password = options.password.as_deref().unwrap_or_default();
-    let password = match saslprep(password) {
-        Ok(v) => v,
-        Err(error) => {
-            return Err(Error::Configuration(
-                format!("Failed to saslprep password: {:?}", error).into(),
-            ))
-        }
-    };
+    let password = saslprep(password).unwrap_or_else(|_| password.into());
 
     // SaltedPassword := Hi(Normalize(password), salt, i)
     let salted_password = hi(&password, &cont.salt, cont.iterations).await?;

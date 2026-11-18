@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 pub(crate) use driver_core::row::*;
 
-use crate::column::{ordinal_by_name, ColumnIndex};
+use crate::column::{column_by_name, ColumnIndex};
 use crate::error::Error;
 use crate::ext::ustr::UStr;
 use crate::HashMap;
@@ -44,7 +44,7 @@ impl Row for MySqlRow {
 
 impl ColumnIndex<MySqlRow> for &'_ str {
     fn index(&self, row: &MySqlRow) -> Result<usize, Error> {
-        ordinal_by_name(&row.column_names, self)
+        column_by_name(&row.column_names, self)
     }
 }
 

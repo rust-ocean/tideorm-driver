@@ -147,7 +147,7 @@ pub struct PgCopyIn<C: DerefMut<Target = PgConnection>> {
 
 impl<C: DerefMut<Target = PgConnection>> PgCopyIn<C> {
     async fn begin(mut conn: C, statement: &str) -> Result<Self> {
-        conn.wait_until_ready().await?;
+        conn.drain_abandoned().await?;
         // counted, so a COPY abandoned part-way is drained by the connection's next use
         conn.queue_simple_query(statement)?;
         conn.inner.stream.flush().await?;
@@ -320,7 +320,7 @@ async fn pg_begin_copy_out<'c, C: DerefMut<Target = PgConnection> + Send + 'c>(
     mut conn: C,
     statement: &str,
 ) -> Result<BoxStream<'c, Result<Bytes>>> {
-    conn.wait_until_ready().await?;
+    conn.drain_abandoned().await?;
     conn.queue_simple_query(statement)?;
     conn.inner.stream.flush().await?;
 

@@ -21,7 +21,7 @@ impl TransactionManager for PgTransactionManager {
 
         // Read what earlier statements left pending first, so the reply read
         // below is this statement's own and the state it starts from current.
-        conn.wait_until_ready().await?;
+        conn.drain_abandoned().await?;
         if depth == 0 {
             conn.inner.stream.deadlocked = false;
         }
@@ -61,7 +61,7 @@ impl TransactionManager for PgTransactionManager {
         }
         // No transaction of ours is open, but the server may still hold one
         // (a raw `BEGIN`); its state is current once the queued replies are read.
-        conn.wait_until_ready().await?;
+        conn.drain_abandoned().await?;
         if Self::get_transaction_state(conn) != TransactionState::Idle {
             conn.execute(rollback_ansi_transaction_sql(1)).await?;
         }

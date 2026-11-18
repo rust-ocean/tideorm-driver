@@ -68,3 +68,23 @@ fn floats_take_float_and_double_columns_only() {
         );
     }
 }
+
+/// A `DOUBLE` past the range of `f32` is refused, not read as infinity; one inside it rounds.
+#[test]
+fn a_double_past_the_range_of_f32_is_refused() {
+    for wide in [3.5e38_f64, -3.5e38, f64::MAX] {
+        let binary = wide.to_le_bytes();
+        assert!(f32::decode(value(&binary, MySqlValueFormat::Binary)).is_err());
+        let text = wide.to_string();
+        assert!(f32::decode(value(text.as_bytes(), MySqlValueFormat::Text)).is_err());
+        assert_eq!(
+            f64::decode(value(&binary, MySqlValueFormat::Binary)).unwrap(),
+            wide
+        );
+    }
+    let max = f64::from(f32::MAX).to_le_bytes();
+    assert_eq!(
+        f32::decode(value(&max, MySqlValueFormat::Binary)).unwrap(),
+        f32::MAX
+    );
+}

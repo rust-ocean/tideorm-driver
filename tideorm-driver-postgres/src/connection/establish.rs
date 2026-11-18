@@ -150,3 +150,7 @@ impl PgConnection {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/connection_establish_tests.rs"]
+mod tests;

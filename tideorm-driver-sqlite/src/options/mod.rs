@@ -236,9 +236,12 @@ impl SqliteConnectOptions {
         self.filename.as_os_str().is_empty() || (self.names_memory() && !self.shared_cache)
     }
 
-    /// An in-memory database: by the flag, or by SQLite's own `:memory:` name.
-    fn names_memory(&self) -> bool {
-        self.in_memory || *self.filename == *Path::new(":memory:")
+    /// An in-memory database: by the flag, or by SQLite's own `:memory:` name, as a filename or
+    /// as a URI.
+    pub(crate) fn names_memory(&self) -> bool {
+        self.in_memory
+            || *self.filename == *Path::new(":memory:")
+            || *self.filename == *Path::new("file::memory:")
     }
 
     /// Whether a connection opened with these options, or with a clone of
@@ -308,6 +311,9 @@ impl SqliteConnectOptions {
 
     /// Sets a timeout value to wait when the database is locked, before
     /// returning a busy timeout error.
+    ///
+    /// The wait runs on the connection's own thread, so cancelling the query
+    /// does not end it: the statement still runs if the lock frees in time.
     ///
     /// The default busy timeout is 5 seconds.
     pub fn busy_timeout(mut self, timeout: Duration) -> Self {

@@ -158,7 +158,7 @@ fn describe(statement: &StatementHandle) -> (Arc<Vec<SqliteColumn>>, Arc<HashMap
             origin: statement.column_origin(i),
         });
 
-        column_names.insert(name, i);
+        driver_core::column::insert_column_name(&mut column_names, name, i);
     }
 
     (Arc::new(columns), Arc::new(column_names))

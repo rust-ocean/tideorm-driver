@@ -95,7 +95,7 @@ impl Connection for MySqlConnection {
     }
 
     async fn ping(&mut self) -> Result<(), Error> {
-        self.inner.stream.wait_until_ready().await?;
+        self.inner.stream.drain_abandoned().await?;
         // Awaited as a reply, so a ping cancelled before its OK arrives
         // leaves that OK to be read before the next statement's reply.
         self.inner.stream.write_command(Command::Ping)?;
@@ -105,7 +105,7 @@ impl Connection for MySqlConnection {
 
     #[doc(hidden)]
     fn flush(&mut self) -> impl Future<Output = Result<(), Error>> + Send + '_ {
-        self.inner.stream.wait_until_ready()
+        self.inner.stream.drain_abandoned()
     }
 
     #[doc(hidden)]

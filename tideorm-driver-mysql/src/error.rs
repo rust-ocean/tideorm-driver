@@ -128,7 +128,9 @@ fn kind_of(number: u16, sqlstate: Option<&str>) -> ErrorKind {
             ER_QUERY_INTERRUPTED | ER_QUERY_TIMEOUT | mariadb::ER_STATEMENT_TIMEOUT => {
                 ErrorKind::StatementTimeout
             }
-            ER_SERVER_SHUTDOWN | mariadb::ER_CONNECTION_KILLED => ErrorKind::ConnectionClosed,
+            ER_SERVER_SHUTDOWN | ER_CLIENT_INTERACTION_TIMEOUT | mariadb::ER_CONNECTION_KILLED => {
+                ErrorKind::ConnectionClosed
+            }
             ER_DBACCESS_DENIED_ERROR
             | ER_TABLEACCESS_DENIED_ERROR
             | ER_COLUMNACCESS_DENIED_ERROR
@@ -217,6 +219,9 @@ pub(crate) mod error_codes {
     pub const ER_QUERY_TIMEOUT: u16 = 3024;
     /// The server is shutting down.
     pub const ER_SERVER_SHUTDOWN: u16 = 1053;
+    /// Sent as `wait_timeout` or `interactive_timeout` ends an idle connection
+    /// (MySQL 8.0.24+).
+    pub const ER_CLIENT_INTERACTION_TIMEOUT: u16 = 4031;
     /// The user may not use the database.
     pub const ER_DBACCESS_DENIED_ERROR: u16 = 1044;
     /// The user may not run the command on the table.

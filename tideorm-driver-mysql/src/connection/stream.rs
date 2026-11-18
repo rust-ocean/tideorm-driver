@@ -88,14 +88,14 @@ impl<S: Socket> MySqlStream<S> {
             match self.waiting.front() {
                 Some(Waiting::Prepare) => {
                     return Err(err_protocol!(
-                        "a statement was cancelled while its prepare was answered; \
-                         the connection must be closed"
+                        "an earlier statement's prepare was cut off part-way (cancelled, or \
+                         its connection failed); the connection must be closed"
                     ));
                 }
                 Some(Waiting::Packet) => {
                     return Err(err_protocol!(
-                        "a read was cancelled between the parts of a packet; \
-                         the connection must be closed"
+                        "an earlier read stopped between the parts of a packet (cancelled, or \
+                         its connection failed); the connection must be closed"
                     ));
                 }
                 _ => {}
@@ -134,6 +134,19 @@ impl<S: Socket> MySqlStream<S> {
         }
 
         Ok(())
+    }
+
+    /// [`wait_until_ready`][Self::wait_until_ready] before a new statement. The replies still
+    /// pending are those of statements no one awaits (a stream dropped part-way, a cancelled
+    /// call), so an error the server sent in one is that statement's, not the new one's.
+    pub(crate) async fn drain_abandoned(&mut self) -> Result<(), Error> {
+        loop {
+            match self.wait_until_ready().await {
+                // its ERR packet ended that reply; the rest are read on
+                Err(Error::Database(_)) => {}
+                done => return done,
+            }
+        }
     }
 
     pub(crate) async fn send_packet<'en, T>(&mut self, payload: T) -> Result<(), Error>
@@ -220,7 +233,7 @@ impl<S: Socket> MySqlStream<S> {
 
         if payload
             .first()
-            .ok_or(err_protocol!("Packet empty"))?
+            .ok_or_else(|| err_protocol!("Packet empty"))?
             .eq(&0xff)
         {
             self.waiting.pop_front();

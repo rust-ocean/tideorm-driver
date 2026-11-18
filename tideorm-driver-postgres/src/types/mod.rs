@@ -197,3 +197,7 @@ fn array_compatible<E: Type<Postgres> + ?Sized>(ty: &PgTypeInfo) -> bool {
 #[cfg(test)]
 #[path = "../../tests/unit/types_version_prefix_tests.rs"]
 mod version_prefix_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/types_fuzz_tests.rs"]
+mod fuzz_tests;

@@ -19,3 +19,15 @@ fn a_timestamp_column_reads_as_a_naive_or_zoned_date_time() {
     let text = MySqlTypeInfo::binary(ColumnType::VarString);
     assert!(!<NaiveDateTime as Type<MySql>>::compatible(&text));
 }
+
+#[test]
+fn a_year_past_9999_is_refused() {
+    let mut buf = Vec::new();
+    for year in [10_000, -1] {
+        let date = NaiveDate::from_ymd_opt(year, 1, 1).unwrap();
+        assert!(encode_date(&date, &mut buf).is_err(), "{year}");
+    }
+    let last = NaiveDate::from_ymd_opt(9999, 12, 31).unwrap();
+    encode_date(&last, &mut buf).expect("9999-12-31 is a MySQL date");
+    assert_eq!(buf, [0x0F, 0x27, 12, 31]);
+}

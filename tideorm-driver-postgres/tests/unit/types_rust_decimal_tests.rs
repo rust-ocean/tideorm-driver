@@ -100,3 +100,41 @@ fn truncated_numerics_are_errors() {
         assert!(PgNumeric::decode(&one[..len]).is_err());
     }
 }
+
+/// A numeric with more digits than `Decimal` holds is refused, not rounded, in either format;
+/// the zeros a declared scale past 28 adds are not digits it needs.
+#[test]
+fn numerics_too_precise_for_decimal_are_refused() {
+    use crate::decode::Decode;
+    use crate::test_support::text;
+    use crate::PgTypeInfo;
+
+    let number = |digits: &[i16], weight, scale| PgNumeric::Number {
+        sign: Positive,
+        digits: digits.to_vec(),
+        weight,
+        scale,
+    };
+    // 1.5 in a numeric(40, 30), and 0.123456789012345678901234567890
+    assert_eq!(
+        Decimal::try_from(&number(&[1, 5000], 0, 30)).unwrap(),
+        Decimal::new(15, 1)
+    );
+    let long = [1234, 5678, 9012, 3456, 7890, 1234, 5678, 9000];
+    assert!(Decimal::try_from(&number(&long, -1, 30)).is_err());
+    // 9234567890123456789012345678.9: past `Decimal::MAX` once its fraction is kept
+    let wide = [9234, 5678, 9012, 3456, 7890, 1234, 5678, 9000];
+    assert!(Decimal::try_from(&number(&wide, 6, 1)).is_err());
+
+    let read = |value: &str| Decimal::decode(text(value, PgTypeInfo::NUMERIC));
+    assert_eq!(
+        read("1.500000000000000000000000000000").unwrap(),
+        Decimal::new(15, 1)
+    );
+    assert!(read("0.123456789012345678901234567890").is_err());
+    assert!(read("9234567890123456789012345678.9").is_err());
+    assert_eq!(
+        read("1234567890123456789012345678.9").unwrap().to_string(),
+        "1234567890123456789012345678.9"
+    );
+}

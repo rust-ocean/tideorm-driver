@@ -1,4 +1,4 @@
-use super::{out_of_range, postgres_epoch, representable};
+use super::{out_of_range, parse_text, postgres_epoch, representable};
 use crate::decode::Decode;
 use crate::encode::{Encode, IsNull};
 use crate::error::BoxDynError;
@@ -58,20 +58,11 @@ impl<'r> Decode<'r, Postgres> for NaiveDateTime {
                     .ok_or_else(|| out_of_range("timestamp", us))?
             }
 
-            PgValueFormat::Text => {
-                let s = value.as_str()?;
-                NaiveDateTime::parse_from_str(
-                    s,
-                    if s.contains('+') {
-                        // Contains a time-zone specifier
-                        // This is given for timestamptz for some reason
-                        // Postgres already guarantees this to always be UTC
-                        "%Y-%m-%d %H:%M:%S%.f%#z"
-                    } else {
-                        "%Y-%m-%d %H:%M:%S%.f"
-                    },
-                )?
-            }
+            // a `TIMESTAMPTZ` prints in the session's time zone; read as UTC, as in binary
+            PgValueFormat::Text => match parse_text(value.as_str()?)? {
+                (naive, Some(offset)) => naive - Duration::seconds(offset.into()),
+                (naive, None) => naive,
+            },
         })
     }
 }
@@ -109,19 +100,15 @@ impl<'r> Decode<'r, Postgres> for DateTime<FixedOffset> {
                 Utc.fix().from_utc_datetime(&naive)
             }
 
+            // the offset of the session's time zone it printed in
             PgValueFormat::Text => {
-                let s = value.as_str()?;
-                DateTime::parse_from_str(
-                    s,
-                    if s.contains('+') || s.contains('-') {
-                        // Contains a time-zone specifier
-                        // This is given for timestamptz for some reason
-                        // Postgres already guarantees this to always be UTC
-                        "%Y-%m-%d %H:%M:%S%.f%#z"
-                    } else {
-                        "%Y-%m-%d %H:%M:%S%.f"
-                    },
-                )?
+                let (naive, offset) = parse_text(value.as_str()?)?;
+                let offset = FixedOffset::east_opt(offset.unwrap_or(0))
+                    .ok_or_else(|| format!("invalid offset {offset:?}"))?;
+                offset
+                    .from_local_datetime(&naive)
+                    .single()
+                    .ok_or("timestamp out of range")?
             }
         })
     }

@@ -44,3 +44,28 @@ fn the_server_recovers_the_password_hash_from_each_scramble() {
         }
     }
 }
+
+#[test]
+fn an_empty_password_gets_an_empty_answer() {
+    // An account without a password refuses a scramble of the empty password, in the
+    // first response and after a switch alike.
+    driver_core::rt::test_block_on(async {
+        let socket = driver_core::net::ScriptedSocket::new(Vec::new());
+        let mut stream =
+            MySqlStream::with_socket(&crate::MySqlConnectOptions::new(), socket).boxed_socket();
+        let nonce = Bytes::from_static(b"0123456789").chain(Bytes::from_static(b"abcdefghij"));
+        for plugin in [
+            AuthPlugin::MySqlNativePassword,
+            AuthPlugin::CachingSha2Password,
+        ] {
+            let answer = plugin.scramble(&mut stream, "", &nonce).await.unwrap();
+            assert!(answer.is_empty(), "{plugin:?}: {answer:?}");
+        }
+        // Without TLS, `sha256_password` sends an empty password as it is, with no key exchange.
+        let answer = AuthPlugin::Sha256Password
+            .scramble(&mut stream, "", &nonce)
+            .await
+            .unwrap();
+        assert_eq!(answer, [0]);
+    });
+}

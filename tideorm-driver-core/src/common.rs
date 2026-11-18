@@ -80,6 +80,11 @@ impl<T> StatementCache<T> {
         self.inner.remove_lru().map(|(_, v)| v)
     }
 
+    /// Takes the statement cached for `k` out of the cache.
+    pub fn remove(&mut self, k: &str) -> Option<T> {
+        self.inner.remove(k)
+    }
+
     /// Empties the cache.
     pub fn clear(&mut self) {
         self.inner.clear();

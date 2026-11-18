@@ -23,12 +23,12 @@ pub enum MySqlSslMode {
     /// TLS, or no connection. The server's certificate is not checked.
     Required,
 
-    /// As `Required`, and the server's certificate must be signed by a
-    /// trusted certificate authority (see `ssl_ca`).
+    /// As `Required`, and the server's certificate must be signed by the
+    /// certificate authority `ssl_ca` names, which this mode needs.
     VerifyCa,
 
     /// As `VerifyCa`, and the certificate must also name the host connected
-    /// to.
+    /// to. Without `ssl_ca`, the public web roots are trusted.
     VerifyIdentity,
 }
 

@@ -8,6 +8,7 @@ use std::fmt::Display;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
+use driver_core::types::decimal_from_text;
 use rust_decimal::Decimal;
 
 use crate::decode::Decode;
@@ -109,7 +110,7 @@ impl Encode<'_, MySql> for Decimal {
 
 impl Decode<'_, MySql> for Decimal {
     fn decode(value: MySqlValueRef<'_>) -> Result<Self, BoxDynError> {
-        decode_text(value)
+        decimal_from_text(value.as_str()?)
     }
 }
 

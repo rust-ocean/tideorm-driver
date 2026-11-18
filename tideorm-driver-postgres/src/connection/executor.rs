@@ -96,7 +96,7 @@ impl PgConnection {
         metadata_opt: Option<Arc<PgStatementMetadata>>,
     ) -> Result<impl Stream<Item = Result<Either<PgQueryResult, PgRow>, Error>> + 'e, Error> {
         // before we continue, wait until we are "ready" to accept more queries
-        self.wait_until_ready().await?;
+        self.drain_abandoned().await?;
 
         // metadata starts out as "nothing"
         let mut metadata = Arc::new(PgStatementMetadata::default());
@@ -104,6 +104,8 @@ impl PgConnection {
         // and a named one is cached once described.
         let mut describing = false;
         let mut parsed = None;
+        // whether this run executes a cached statement, parsing none
+        let mut reused = false;
 
         let format = if let Some(mut arguments) = arguments {
             // Check this before we write anything to the stream.
@@ -136,6 +138,7 @@ impl PgConnection {
                     .apply_patches(self, Some(&cached.parameters))
                     .await?;
                 metadata = cached;
+                reused = true;
                 (id, None)
             } else {
                 // Without a cache a named statement would never be closed.
@@ -215,7 +218,15 @@ impl PgConnection {
                 let message = match held.pop_front() {
                     Some(message) => message,
                     None if ended => break,
-                    None => self.inner.stream.recv().await?,
+                    None => match self.inner.stream.recv().await {
+                        Ok(message) => message,
+                        Err(error) => {
+                            if reused && is_stale_plan(&error) {
+                                self.forget_statement(query.as_str());
+                            }
+                            return Err(error);
+                        }
+                    },
                 };
 
                 match message.format {
@@ -414,7 +425,7 @@ impl<'c> Executor<'c> for &'c mut PgConnection {
     where
         'c: 'e,
     {
-        self.wait_until_ready().await?;
+        self.drain_abandoned().await?;
 
         let (_, metadata) = self
             .get_or_prepare(sql.as_str(), parameters, true, None, true)
@@ -424,6 +435,16 @@ impl<'c> Executor<'c> for &'c mut PgConnection {
 
         Ok(PgStatement { sql, metadata })
     }
+}
+
+/// Whether `error` is PostgreSQL refusing a prepared statement whose result columns a change to
+/// a table it reads has altered (`cached plan must not change result type`, `feature_not_supported`),
+/// which it does on every run until the statement is parsed again.
+fn is_stale_plan(error: &Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .is_some_and(|code| code == "0A000")
 }
 
 /// Whether a statement whose parameters are `parameters` reads values of the

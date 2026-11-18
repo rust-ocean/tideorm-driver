@@ -81,7 +81,7 @@ impl FakeServer {
     }
 }
 
-fn serve(
+pub(crate) fn serve(
     stream: io::Result<TcpStream>,
     session: usize,
     answer: &dyn Fn(&str) -> Answer,
@@ -122,7 +122,7 @@ fn serve(
     }
 }
 
-fn read_body(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+pub(crate) fn read_body(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     let mut len = [0; 4];
     stream.read_exact(&mut len)?;
     let len = usize::try_from(u32::from_be_bytes(len)).unwrap();
@@ -131,7 +131,7 @@ fn read_body(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     Ok(body)
 }
 
-fn send(stream: &mut TcpStream, tag: u8, body: &[u8]) -> io::Result<()> {
+pub(crate) fn send(stream: &mut TcpStream, tag: u8, body: &[u8]) -> io::Result<()> {
     let len = u32::try_from(body.len() + 4).unwrap();
     stream.write_all(&[tag])?;
     stream.write_all(&len.to_be_bytes())?;

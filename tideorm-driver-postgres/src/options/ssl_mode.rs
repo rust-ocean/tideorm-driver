@@ -24,7 +24,7 @@ pub enum PgSslMode {
     Require,
 
     /// Only try an SSL connection, and verify that the server certificate is issued by a
-    /// trusted certificate authority (CA).
+    /// trusted certificate authority (CA), the one `sslrootcert` names, which this mode needs.
     VerifyCa,
 
     /// Only try an SSL connection; verify that the server certificate is issued by a trusted

@@ -43,17 +43,23 @@ macro_rules! impl_float {
             // as MySQL rounds a `DOUBLE` stored in a `FLOAT`.
             #[allow(clippy::cast_possible_truncation)]
             fn decode(value: MySqlValueRef<'_>) -> Result<Self, BoxDynError> {
-                if let MySqlValueFormat::Text = value.format() {
-                    return Ok(value.as_str()?.parse()?);
+                let read: $rust = match value.format() {
+                    MySqlValueFormat::Text => value.as_str()?.parse()?,
+                    MySqlValueFormat::Binary => match *value.as_bytes()? {
+                        [a, b, c, d] => f32::from_le_bytes([a, b, c, d]) as $rust,
+                        [a, b, c, d, e, f, g, h] => {
+                            f64::from_le_bytes([a, b, c, d, e, f, g, h]) as $rust
+                        }
+                        ref bytes => {
+                            return Err(not_a_float(bytes.len(), $sql, stringify!($rust)));
+                        }
+                    },
+                };
+                // MySQL stores no infinity: an infinite read is a value past this type's range
+                if read.is_infinite() {
+                    return Err(concat!("a value past the range of `", stringify!($rust), "`").into());
                 }
-
-                match *value.as_bytes()? {
-                    [a, b, c, d] => Ok(f32::from_le_bytes([a, b, c, d]) as $rust),
-                    [a, b, c, d, e, f, g, h] => {
-                        Ok(f64::from_le_bytes([a, b, c, d, e, f, g, h]) as $rust)
-                    }
-                    ref bytes => Err(not_a_float(bytes.len(), $sql, stringify!($rust))),
-                }
+                Ok(read)
             }
         }
     )*};

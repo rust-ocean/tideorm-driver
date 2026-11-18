@@ -123,7 +123,7 @@ fn a_prepare_cancelled_part_way_refuses_the_connection() {
             if read < response.len() {
                 let refused = ready.expect("a refusal waits for nothing").unwrap_err();
                 assert!(
-                    refused.to_string().contains("cancelled while its prepare"),
+                    refused.to_string().contains("prepare was cut off part-way"),
                     "{refused}"
                 );
             } else {
@@ -367,6 +367,23 @@ fn rows_share_the_prepared_columns_while_they_match() {
         assert!(!Arc::ptr_eq(&rows[0].columns, &prepared.columns));
         assert_eq!(rows[0].columns[0].type_info.r#type, ColumnType::VarString);
         assert_eq!(rows[0].column_names.get("a"), Some(&0));
+        assert!(conn.inner.stream.waiting.is_empty());
+    });
+}
+
+/// A stream dropped before its reply ended leaves the rest of that reply to be read before the
+/// next statement; an error in it ended the dropped statement and is not the next one's.
+#[test]
+fn an_error_in_an_abandoned_reply_does_not_fail_the_next_statement() {
+    driver_core::rt::test_block_on(async {
+        let (mut conn, input) = connection(0);
+        conn.inner.stream.waiting.push_back(Waiting::Result);
+        let mut error = vec![0xff];
+        error.extend(1146_u16.to_le_bytes());
+        error.extend(b"#42S02no such table");
+        let ok = packet(&[0x00, 0, 0, 2, 0, 0, 0]);
+        input.lock().unwrap().extend([packet(&error), ok].concat());
+        conn.execute("SELECT 1").await.unwrap();
         assert!(conn.inner.stream.waiting.is_empty());
     });
 }

@@ -97,6 +97,16 @@ impl_encode! {
     Rc<[u8]> => |v| Blob(Arc::new(v.to_vec()));
 }
 
+/// `wide` as the nearest `f32`, or an error when it is finite and past the range of one.
+#[allow(clippy::cast_possible_truncation)]
+fn narrowed(wide: f64) -> Result<f32, BoxDynError> {
+    let narrow = wide as f32;
+    match narrow.is_infinite() && wide.is_finite() {
+        true => Err(format!("{wide} is past the range of `f32`").into()),
+        false => Ok(narrow),
+    }
+}
+
 /// `Decode`: what a type reads from the value `v`.
 macro_rules! impl_decode {
     ($($(#[$attr:meta])* $ty:ty => |$v:ident| $read:expr;)*) => {$(
@@ -112,8 +122,7 @@ macro_rules! impl_decode {
 impl_decode! {
     bool => |v| v.int64()? != 0;
     // SQLite keeps only doubles; an `f32` takes the nearest value.
-    #[allow(clippy::cast_possible_truncation)]
-    f32 => |v| v.double()? as f32;
+    f32 => |v| narrowed(v.double()?)?;
     f64 => |v| v.double()?;
     &'r str => |v| v.text_borrowed()?;
     String => |v| v.text_owned()?;

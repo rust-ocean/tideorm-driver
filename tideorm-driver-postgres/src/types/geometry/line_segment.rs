@@ -88,10 +88,10 @@ impl FromStr for PgLSeg {
 
 impl PgLSeg {
     fn from_bytes(mut bytes: &[u8]) -> Result<PgLSeg, BoxDynError> {
-        let start_x = bytes.get_f64();
-        let start_y = bytes.get_f64();
-        let end_x = bytes.get_f64();
-        let end_y = bytes.get_f64();
+        let start_x = bytes.try_get_f64()?;
+        let start_y = bytes.try_get_f64()?;
+        let end_x = bytes.try_get_f64()?;
+        let end_y = bytes.try_get_f64()?;
 
         Ok(PgLSeg {
             start_x,

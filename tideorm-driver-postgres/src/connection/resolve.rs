@@ -106,7 +106,7 @@ impl PgConnection {
                 relation_attribute_no: field.relation_attribute_no,
             });
 
-            column_names.insert(name, ordinal);
+            driver_core::column::insert_column_name(&mut column_names, name, ordinal);
         }
 
         Ok(Arc::new(PgStatementMetadata {
